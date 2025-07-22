@@ -24,12 +24,14 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.OperatorStateStore;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +58,7 @@ class OpenGeminiSinkTest {
     @Mock private FunctionInitializationContext mockInitContext;
 
     @Mock private OperatorStateStore mockOperatorStateStore;
+    @Mock private FunctionSnapshotContext mockSnapshotContext;
 
     @Mock private ListState<List<Point>> mockListState;
 
@@ -340,11 +343,11 @@ class OpenGeminiSinkTest {
                                 return createMockPoint(data.sensorId, data.value);
                             });
 
-            // 模拟超时
+            // simulate timeout
             CompletableFuture<Void> timeoutFuture = new CompletableFuture<>();
             when(mockClient.write(anyString(), anyList())).thenReturn(timeoutFuture);
 
-            // 配置较短的超时时间
+            // configure the sink with a very short request timeout
             OpenGeminiSinkConfiguration<TestData> configuration =
                     OpenGeminiSinkConfiguration.<TestData>builder()
                             .setHost("localhost")
@@ -373,6 +376,120 @@ class OpenGeminiSinkTest {
                                     mock(SinkFunction.Context.class));
                         }
                     });
+        }
+    }
+
+    @Test
+    public void testCheckpointingAndRestoring() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+            // Setup
+            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            when(mockClient.write(anyString(), anyList()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Setup state
+            when(mockInitContext.getOperatorStateStore()).thenReturn(mockOperatorStateStore);
+            when(mockOperatorStateStore.getListState(any(ListStateDescriptor.class)))
+                    .thenReturn(mockListState);
+            when(mockInitContext.isRestored()).thenReturn(false);
+            when(mockSnapshotContext.getCheckpointId()).thenReturn(1L);
+
+            // Initialize state
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            // Add some data
+            TestData testData = new TestData("sensor1", 25.5);
+            Point mockPoint = createMockPoint("sensor1", 25.5);
+            when(mockConverter.convert(testData, "test_measurement")).thenReturn(mockPoint);
+
+            sink.invoke(testData, mock(SinkFunction.Context.class));
+
+            // Snapshot state
+            sink.snapshotState(mockSnapshotContext);
+
+            // Verify state was saved
+            verify(mockListState).clear();
+            verify(mockListState, atMost(1)).add(anyList());
+
+            // Simulate restore
+            List<Point> restoredPoints = Collections.singletonList(mockPoint);
+            when(mockInitContext.isRestored()).thenReturn(true);
+            when(mockListState.get()).thenReturn(Collections.singletonList(restoredPoints));
+
+            // Create new sink instance and restore
+            OpenGeminiSink<TestData> restoredSink = new OpenGeminiSink<>(configuration);
+            restoredSink.initializeState(mockInitContext);
+            restoredSink.open(new Configuration());
+
+            // Verify state was restored
+            verify(mockListState).get();
+        }
+    }
+
+    @Test
+    void testFlushFailureRetainsData() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // set write failure
+            AtomicInteger attempts = new AtomicInteger();
+
+            CompletableFuture<Void> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new RuntimeException("Testing Failure Handling: Write failed"));
+            when(mockClient.write(anyString(), anyList())).thenReturn(failedFuture);
+
+            when(mockConverter.convert(any(), anyString()))
+                    .thenAnswer(
+                            invocation -> {
+                                TestData data = invocation.getArgument(0);
+                                return createMockPoint(data.sensorId, data.value);
+                            });
+
+            // initialize state first
+            when(mockInitContext.getOperatorStateStore()).thenReturn(mockOperatorStateStore);
+            when(mockOperatorStateStore.getListState(any(ListStateDescriptor.class)))
+                    .thenReturn(mockListState);
+            // create a new config to set max retries to 0
+            // retrying here is meaningless as every retry must fail, and will cause exponential
+            // backoff, which is time-consuming
+            OpenGeminiSinkConfiguration<TestData> configuration =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost(OpenGeminiSinkConfiguration.DEFAULT_HOST)
+                            .setPort(OpenGeminiSinkConfiguration.DEFAULT_PORT)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setBatchSize(10)
+                            .setFlushInterval(100, TimeUnit.MILLISECONDS)
+                            .setMaxRetries(0)
+                            .setConnectionTimeout(Duration.ofSeconds(5))
+                            .setRequestTimeout(Duration.ofSeconds(1))
+                            .setConverter(mockConverter)
+                            .build();
+
+            sink = new OpenGeminiSink<>(configuration);
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            // add data to trigger flush
+            for (int i = 0; i < configuration.getBatchSize(); i++) {
+                try {
+                    sink.invoke(new TestData("sensor" + i, i), mock(SinkFunction.Context.class));
+                } catch (Exception e) {
+                    // Ignore expected exception from write failure
+                }
+            }
+
+            sink.snapshotState(mockSnapshotContext);
+            verify(mockListState).add(argThat(list -> list.size() == configuration.getBatchSize()));
         }
     }
 

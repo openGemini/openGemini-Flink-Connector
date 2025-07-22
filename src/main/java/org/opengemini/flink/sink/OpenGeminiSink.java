@@ -22,6 +22,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
@@ -52,6 +56,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     // TODO: decouple converter from configuration
     // Converter for converting input values to OpenGemini Points
     private OpenGeminiPointConverter<T> converter;
+    private transient ListState<List<Point>> checkpointedState;
 
     // Runtime state
     private transient OpenGeminiClient client;
@@ -295,15 +300,67 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 errorCount.get());
     }
 
+    /**
+     * Called to snapshot the state of the sink for checkpointing. Batches are flushed and if any
+     * exception thrown during flushing, currentBatch will be saved to checkpointedState.
+     *
+     * @param context
+     * @throws Exception
+     */
     @Override
-    public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
-        // TODO: implement state snapshotting
+    public void snapshotState(FunctionSnapshotContext context) throws Exception {
+        log.info("Starting checkpoint {} for OpenGeminiSink", context.getCheckpointId());
+
+        try {
+            // force flush current batch
+            flush();
+        } catch (Exception e) {
+            log.error(
+                    "Failed to flush during checkpoint, will save data that are not successfully flushed to state",
+                    e);
+        }
+
+        checkpointedState.clear();
+        if (!currentBatch.isEmpty()) {
+            checkpointedState.add(new ArrayList<>(currentBatch));
+        }
+
+        log.info(
+                "Completed checkpoint {} with stats: points={}, batches={}, errors={}",
+                context.getCheckpointId(),
+                totalPointsWritten.get(),
+                batchesWritten.get(),
+                errorCount.get());
     }
 
+    /**
+     * Called to initialize currentBatch arraylist or recover currentBatch from checkpointedState.
+     *
+     * @param context the context for initializing the operator
+     * @throws Exception
+     */
     @Override
-    public void initializeState(FunctionInitializationContext functionInitializationContext)
-            throws Exception {
-        // TODO: implement state initialization
-        currentBatch = new ArrayList<>(configuration.getBatchSize());
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        ListStateDescriptor<List<Point>> descriptor =
+                new ListStateDescriptor<>(
+                        "opengemini-sink-state",
+                        TypeInformation.of(new TypeHint<List<Point>>() {}));
+
+        checkpointedState = context.getOperatorStateStore().getListState(descriptor);
+
+        if (currentBatch == null) {
+            currentBatch = new ArrayList<>(configuration.getBatchSize());
+        }
+
+        if (context.isRestored()) {
+            // Restore state after a failure
+            log.info("Restoring state for OpenGeminiSink");
+            int restoredCount = 0;
+            for (List<Point> batch : checkpointedState.get()) {
+                currentBatch.addAll(batch);
+                restoredCount += batch.size();
+            }
+            log.info("Restored {} points from checkpoint", restoredCount);
+        }
     }
 }
