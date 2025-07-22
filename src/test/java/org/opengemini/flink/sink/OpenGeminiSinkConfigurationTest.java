@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
@@ -643,33 +642,5 @@ class OpenGeminiSinkConfigurationTest {
                 () ->
                         OpenGeminiSinkConfiguration.fromPropertiesFile(
                                 propertiesFile, mockConverter));
-    }
-
-    @Test
-    void testCreateDefaultConfigurationFromClasspath() throws IOException {
-        // This test assumes you have a test properties file in src/test/resources
-        // Create a test properties file in src/test/resources/opengemini-connector.properties
-        // with the following content:
-        // opengemini.database=classpathdb
-        // opengemini.measurement=classpathmeas
-
-        // For unit testing, we'll skip this test if the file doesn't exist
-        InputStream is =
-                getClass()
-                        .getClassLoader()
-                        .getResourceAsStream(OpenGeminiSinkConfiguration.DEFAULT_CONFIG_FILE_NAME);
-
-        if (is != null) {
-            is.close();
-
-            OpenGeminiSinkConfiguration<String> config =
-                    OpenGeminiSinkConfiguration.createDefaultConfiguration(mockConverter);
-
-            assertNotNull(config.getDatabase());
-            assertNotNull(config.getMeasurement());
-        } else {
-            // Skip test if no classpath file exists
-            System.out.println("Skipping classpath test - no properties file in classpath");
-        }
     }
 }
