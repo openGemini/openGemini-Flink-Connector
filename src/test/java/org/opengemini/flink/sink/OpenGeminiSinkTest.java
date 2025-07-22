@@ -138,6 +138,103 @@ class OpenGeminiSinkTest {
     }
 
     @Test
+    void testBatchingTriggersWhenBatchSizeReached() throws Exception {
+
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+            // Setup
+            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            when(mockClient.write(anyString(), anyList()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Create configuration with small batch size
+            configuration =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost(OpenGeminiSinkConfiguration.DEFAULT_HOST)
+                            .setPort(OpenGeminiSinkConfiguration.DEFAULT_PORT)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setBatchSize(2)
+                            .setFlushInterval(
+                                    10,
+                                    TimeUnit.SECONDS) // Long interval to ensure batch size triggers
+                            .setConverter(mockConverter)
+                            .build();
+
+            sink = new OpenGeminiSink<>(configuration);
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            // Create test data
+            List<TestData> testDataList =
+                    Arrays.asList(new TestData("sensor1", 25.5), new TestData("sensor2", 26.0));
+
+            // Setup converter
+            when(mockConverter.convert(any(), anyString()))
+                    .thenAnswer(
+                            invocation -> {
+                                TestData data = invocation.getArgument(0);
+                                return createMockPoint(data.sensorId, data.value);
+                            });
+
+            // Act - invoke twice to trigger batch
+            for (TestData data : testDataList) {
+                sink.invoke(data, mock(SinkFunction.Context.class));
+            }
+
+            // Verify batch was written
+            verify(mockClient, atLeastOnce()).write(eq(TEST_DB_NAME), anyList());
+        }
+    }
+
+    @Test
+    void testFlushIntervalTrigger() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+            // Setup
+            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            when(mockClient.write(anyString(), anyList()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Create configuration with short flush interval
+            configuration =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost(OpenGeminiSinkConfiguration.DEFAULT_HOST)
+                            .setPort(OpenGeminiSinkConfiguration.DEFAULT_PORT)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setBatchSize(100) // Large batch size to ensure interval triggers first
+                            .setFlushInterval(50, TimeUnit.MILLISECONDS)
+                            .setConverter(mockConverter)
+                            .build();
+
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            // Add one point
+            TestData testData = new TestData("sensor1", 25.5);
+            Point mockPoint = createMockPoint("sensor1", 25.5);
+            when(mockConverter.convert(testData, TEST_MEASUREMENT_NAME)).thenReturn(mockPoint);
+
+            sink.invoke(testData, mock(SinkFunction.Context.class));
+
+            // Wait for flush interval
+            Thread.sleep(configuration.getFlushIntervalMillis() + 50);
+
+            // call invoke again to trigger flushing
+            sink.invoke(testData, mock(SinkFunction.Context.class));
+
+            // Verify flush occurred
+            verify(mockClient, atLeastOnce()).write(eq(TEST_DB_NAME), anyList());
+        }
+    }
+
+    @Test
     void testRetryMechanism() throws Exception {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
