@@ -13,6 +13,7 @@ A high-performance Apache Flink sink connector for [OpenGemini](https://github.c
 - **Type Conversion**: Pluggable converter interface for custom data transformations
 - **Async Writing**: Non-blocking writes with configurable parallelism
 - **Error Handling**: Automatic retry for transient failures with exponential backoff
+- **Monitoring and Metrics**: Exposes metrics for monitoring write performance and errors
 
 ## Quick Start
 
@@ -73,11 +74,11 @@ Load configuration from file:
 
 ```java
 // Load from default locations (current directory or classpath)
-OpenGeminiSinkConfiguration<MyData> config = 
+OpenGeminiSinkConfiguration<MyData> config =
     OpenGeminiSinkConfiguration.createDefaultConfiguration(new MyDataConverter());
 
 // Or load from specific file
-OpenGeminiSinkConfiguration<MyData> config = 
+OpenGeminiSinkConfiguration<MyData> config =
     OpenGeminiSinkConfiguration.fromPropertiesFile("config/my-config.properties", new MyDataConverter());
 ```
 
@@ -86,7 +87,7 @@ OpenGeminiSinkConfiguration<MyData> config =
 ```java
 // Using Flink's ParameterTool
 ParameterTool params = ParameterTool.fromArgs(args);
-OpenGeminiSinkConfiguration<MyData> config = 
+OpenGeminiSinkConfiguration<MyData> config =
     OpenGeminiSinkConfiguration.fromParameterTool(params, new MyDataConverter());
 ```
 
@@ -108,7 +109,7 @@ props.load(new FileInputStream("base-config.properties"));
 
 ParameterTool params = ParameterTool.fromArgs(args);
 
-OpenGeminiSinkConfiguration<MyData> config = 
+OpenGeminiSinkConfiguration<MyData> config =
     OpenGeminiSinkConfiguration.fromMixedSources(params, props, new MyDataConverter());
 ```
 
@@ -188,12 +189,21 @@ During checkpoints, the sink will flush all buffered data to ensure no data loss
 
 ## Monitoring
 
-The connector exposes the following metrics (when integrated):
+The connector exposes the following Flink metrics under `opengemini.sink`:
 
-- `recordsWritten`: Total number of records successfully written
-- `writeErrors`: Total number of write failures
-- `batchSize`: Histogram of batch sizes
-- `writeLatency`: Histogram of write latencies
+| Metric | Type | Description |
+|--------|------|-------------|
+| `writeLatency` | Histogram | Batch write latency in milliseconds |
+| `currentBatchSize` | Gauge | Current number of points in buffer |
+| `writeErrors` | Counter | Total number of write failures |
+| `lastSuccessfulWriteTime` | Gauge | Timestamp of last successful write |
+| `pointsPerSecond` | Meter | Write throughput (60-second window) |
+| `totalBytesWritten` | Gauge | Total bytes written to OpenGemini |
+
+Access metrics via:
+- Flink Web UI: Navigate to Task Metrics
+- REST API: `/jobs/:jobid/metrics`
+- Export to monitoring systems (Prometheus, Graphite, etc.)
 
 ## Known Limitations
 
@@ -204,10 +214,8 @@ The connector exposes the following metrics (when integrated):
 ## Roadmap
 
 - [ ] Table API and SQL support
-- [ ] Exactly-once semantics with two-phase commit
 - [ ] Load balancing across multiple OpenGemini nodes
 - [ ] Adaptive batching based on load
-- [ ] Flink metrics integration
 
 ## Requirements
 

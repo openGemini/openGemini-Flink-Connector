@@ -27,6 +27,10 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.*;
+import org.apache.flink.metrics.MeterView;
+import org.apache.flink.metrics.SimpleCounter;
+import org.apache.flink.runtime.metrics.DescriptiveStatisticsHistogram;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
@@ -62,11 +66,27 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     private transient OpenGeminiClient client;
     private transient List<Point> currentBatch;
     private transient long lastFlushTime;
-    // TODO: support Flink metrics
+
+    // Statistics for metrics
     private transient AtomicLong totalBytesWritten;
-    private transient AtomicLong totalPointsWritten;
+    private transient SimpleCounter totalPointsWritten;
     private transient AtomicLong errorCount;
     private transient AtomicLong batchesWritten;
+    private transient AtomicLong lastSuccessfulWriteTime;
+
+    // Flink Metrics
+    private transient Histogram writeLatency;
+    private transient Counter writeErrors;
+    private transient Meter pointsPerSecond;
+
+    public static final String METRIC_FIRST_NAME = "opengemini";
+    public static final String METRIC_SECOND_NAME = "sink";
+    public static final String WRITE_LATENCY_METRIC = "writeLatency";
+    public static final String CURRENT_BATCH_SIZE_METRIC = "currentBatchSize";
+    public static final String WRITE_ERRORS_METRIC = "writeErrors";
+    public static final String LAST_SUCCESSFUL_WRITE_TIME_METRIC = "lastSuccessfulWriteTime";
+    public static final String POINTS_PER_SECOND_METRIC = "pointsPerSecond";
+    public static final String TOTAL_BYTES_WRITTEN_METRIC = "totalBytesWritten";
 
     /**
      * Creates a new OpenGeminiSink with the specified configuration.
@@ -116,9 +136,12 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
 
         // Initialize runtime components
         totalBytesWritten = new AtomicLong(0);
-        totalPointsWritten = new AtomicLong(0);
+        this.totalPointsWritten = new SimpleCounter();
         errorCount = new AtomicLong(0);
         batchesWritten = new AtomicLong(0);
+        lastSuccessfulWriteTime = new AtomicLong(System.currentTimeMillis());
+
+        registerMetrics();
 
         // Ensure database exists
         try {
@@ -140,6 +163,57 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 configuration.getMeasurement(),
                 configuration.getBatchSize(),
                 configuration.getFlushIntervalMillis());
+    }
+
+    /** Register Flink metrics for monitoring */
+    private void registerMetrics() {
+        MetricGroup metricGroup =
+                getRuntimeContext()
+                        .getMetricGroup()
+                        .addGroup(METRIC_FIRST_NAME)
+                        .addGroup(METRIC_SECOND_NAME);
+
+        // 1. Write latency histogram
+        this.writeLatency =
+                metricGroup.histogram(
+                        WRITE_LATENCY_METRIC, new DescriptiveStatisticsHistogram(1000));
+
+        // 2. Current batch size gauge
+        metricGroup.gauge(
+                CURRENT_BATCH_SIZE_METRIC,
+                new Gauge<Integer>() {
+                    @Override
+                    public Integer getValue() {
+                        return currentBatch != null ? currentBatch.size() : 0;
+                    }
+                });
+
+        // 3. Write errors counter
+        this.writeErrors = metricGroup.counter(WRITE_ERRORS_METRIC);
+
+        // 4. Last successful write time gauge
+        metricGroup.gauge(
+                LAST_SUCCESSFUL_WRITE_TIME_METRIC,
+                new Gauge<Long>() {
+                    @Override
+                    public Long getValue() {
+                        return lastSuccessfulWriteTime.get();
+                    }
+                });
+
+        // 5. Points per second meter
+        this.pointsPerSecond =
+                metricGroup.meter(POINTS_PER_SECOND_METRIC, new MeterView(totalPointsWritten, 60));
+
+        // 6. Total bytes written gauge
+        metricGroup.gauge(
+                TOTAL_BYTES_WRITTEN_METRIC,
+                new Gauge<Long>() {
+                    @Override
+                    public Long getValue() {
+                        return totalBytesWritten.get();
+                    }
+                });
     }
 
     @Override
@@ -183,6 +257,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         } catch (Exception e) {
             log.error("Error writing batch to OpenGemini: {}", e.getMessage(), e);
             errorCount.incrementAndGet();
+            writeErrors.inc();
             // Re-add points to current batch for retry/checkpointing
             currentBatch.addAll(batchToWrite);
             // rethrow to signal failure
@@ -208,6 +283,8 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         int retries = 0;
         Exception lastException = null;
 
+        // Flag to track if this is the first retry, used by writeErrors metric
+        boolean isFirstRetry = true;
         while (retries <= configuration.getMaxRetries()) {
             try {
                 long startTime = System.currentTimeMillis();
@@ -218,8 +295,12 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
 
                 long writeTime = System.currentTimeMillis() - startTime;
 
+                // Update metrics
+                writeLatency.update(writeTime);
+                lastSuccessfulWriteTime.set(System.currentTimeMillis());
+
                 // update statistics
-                totalPointsWritten.addAndGet(points.size());
+                totalPointsWritten.inc(points.size());
                 batchesWritten.incrementAndGet();
                 long estimatedBytes = estimatePointsSize(points);
                 totalBytesWritten.addAndGet(estimatedBytes);
@@ -239,6 +320,14 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                         configuration.getMaxRetries() + 1,
                         e.getMessage());
                 errorCount.incrementAndGet();
+                // only increment writeErrors on retries after the first attempt
+                // as flush() has already incremented it
+                if (isFirstRetry) {
+                    isFirstRetry = false;
+                } else {
+                    writeErrors.inc();
+                }
+
                 retries++;
 
                 if (retries <= configuration.getMaxRetries()) {
@@ -295,7 +384,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
 
         log.info(
                 "OpenGeminiSink closed. Final stats: totalPoints={}, batches={}, errors={}",
-                totalPointsWritten.get(),
+                totalPointsWritten.getCount(),
                 batchesWritten.get(),
                 errorCount.get());
     }
@@ -328,7 +417,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         log.info(
                 "Completed checkpoint {} with stats: points={}, batches={}, errors={}",
                 context.getCheckpointId(),
-                totalPointsWritten.get(),
+                totalPointsWritten.getCount(),
                 batchesWritten.get(),
                 errorCount.get());
     }
