@@ -149,8 +149,19 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
 
         currentBatch.add(point);
 
-        // TODO: implement real batch writing, while this flush() literally buffers no data
-        flush();
+        if (shouldFlush()) {
+            flush();
+        }
+    }
+
+    private boolean shouldFlush() {
+        boolean batchFull = currentBatch.size() >= configuration.getBatchSize();
+        boolean timeoutReached =
+                configuration.getFlushIntervalMillis() > 0
+                        && (System.currentTimeMillis() - lastFlushTime)
+                                >= configuration.getFlushIntervalMillis();
+
+        return batchFull || (timeoutReached && !currentBatch.isEmpty());
     }
 
     private void flush() throws Exception {
