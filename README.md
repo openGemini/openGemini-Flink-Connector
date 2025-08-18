@@ -161,6 +161,114 @@ When using `createDefaultConfiguration()`, the connector searches for `opengemin
 1. Current working directory
 2. Classpath (typically `src/main/resources`)
 
+根据代码，需要添加以下 Table API/SQL 支持部分：
+
+## Table API / SQL Support
+
+### Creating Table with DDL
+
+```sql
+CREATE TABLE sensor_data (
+    sensor_id STRING,
+    location STRING,
+    temperature DOUBLE,
+    humidity DOUBLE,
+    pressure DOUBLE,
+    ts TIMESTAMP(3),
+    WATERMARK FOR ts AS ts - INTERVAL '5' SECOND
+) WITH (
+    'connector' = 'opengemini',
+    'host' = 'localhost',
+    'port' = '8086',
+    'database' = 'mydb',
+    'measurement' = 'sensors',
+    'username' = 'admin',
+    'password' = 'secret',
+
+    -- Field mapping
+    'timestamp-field' = 'ts',
+    'tag-fields' = 'sensor_id,location',
+    'field-fields' = 'temperature,humidity,pressure',
+
+    -- Write options
+    'batch-size' = '5000',
+    'flush-interval' = '1s',
+    'ignore-null-values' = 'true',
+    'write-precision' = 'ms',
+
+    -- Performance
+    'max-retries' = '3',
+    'connection-timeout' = '10s',
+    'request-timeout' = '30s'
+);
+
+-- Insert data
+INSERT INTO sensor_data
+SELECT sensor_id, location, temp, humidity, pressure, CURRENT_TIMESTAMP
+FROM source_table;
+```
+
+### Table API Usage
+
+```java
+import org.apache.flink.table.api.*;
+
+TableEnvironment tableEnv = TableEnvironment.create(settings);
+
+// Define table with connector
+tableEnv.executeSql(
+    "CREATE TABLE measurements (" +
+    "  device_id STRING," +
+    "  metric_name STRING," +
+    "  value DOUBLE," +
+    "  event_time TIMESTAMP(3)" +
+    ") WITH (" +
+    "  'connector' = 'opengemini'," +
+    "  'host' = 'localhost'," +
+    "  'database' = 'metrics'," +
+    "  'measurement' = 'device_metrics'," +
+    "  'tag-fields' = 'device_id,metric_name'," +
+    "  'timestamp-field' = 'event_time'" +
+    ")"
+);
+
+// Write data using Table API
+Table sourceTable = tableEnv.from("source");
+sourceTable.insertInto("measurements").execute();
+```
+
+### Field Mapping Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `timestamp-field` | - | Column to use as timestamp (uses processing time if not set) |
+| `tag-fields` | - | Comma-separated list of columns to use as OpenGemini tags |
+| `field-fields` | - | Comma-separated list of columns to use as OpenGemini fields (default: all non-tag columns) |
+| `write-precision` | `ms` | Timestamp precision: `ns`, `us`, `ms`, `s`, `m`, `h` |
+| `ignore-null-values` | `true` | Whether to skip null values when writing |
+
+### Supported Data Types
+
+| Flink SQL Type | OpenGemini Field Type | Notes |
+|----------------|----------------------|-------|
+| BOOLEAN | Boolean | |
+| TINYINT, SMALLINT, INTEGER | Integer | |
+| BIGINT | Long | |
+| FLOAT | Float | |
+| DOUBLE | Double | |
+| DECIMAL | Decimal | |
+| VARCHAR, CHAR | String | |
+| TIMESTAMP | Timestamp | Converted based on `write-precision` |
+
+### Changelog Support
+
+The connector supports the following row kinds:
+- **INSERT**: Written as new points
+- **UPDATE_AFTER**: Written as new points (upsert behavior)
+- **UPDATE_BEFORE**: Ignored
+- **DELETE**: Ignored
+
+
 ## Building from Source
 
 ```bash
@@ -208,17 +316,15 @@ Access metrics via:
 ## Known Limitations
 
 - Currently supports at-least-once delivery semantics only
-- Table API/SQL support is not yet implemented
 - No support for schema evolution
 
 ## Roadmap
 
-- [ ] Table API and SQL support
 - [ ] Load balancing across multiple OpenGemini nodes
 - [ ] Adaptive batching based on load
 
 ## Requirements
 
-- Apache Flink 1.17+
+- Apache Flink 1.18+
 - Java 8+
 - OpenGemini

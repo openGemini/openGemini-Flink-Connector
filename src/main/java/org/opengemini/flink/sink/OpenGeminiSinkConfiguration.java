@@ -187,6 +187,36 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         }
     }
 
+    /**
+     * Creates a new builder from this configuration. This is useful for modifying existing
+     * configurations.
+     *
+     * @return A new builder with values from this configuration
+     */
+    public Builder<T> toBuilder() {
+        Builder<T> builder =
+                new Builder<T>()
+                        .setHost(this.host)
+                        .setPort(this.port)
+                        .setDatabase(this.database)
+                        .setMeasurement(this.measurement)
+                        .setBatchSize(this.batchSize)
+                        .setFlushInterval(this.flushIntervalMillis, TimeUnit.MILLISECONDS)
+                        .setMaxRetries(this.maxRetries)
+                        .setConnectionTimeout(this.connectionTimeout)
+                        .setRequestTimeout(this.requestTimeout)
+                        .setConverter(this.converter);
+
+        if (this.username != null) {
+            builder.setUsername(this.username);
+        }
+        if (this.password != null) {
+            builder.setPassword(this.password);
+        }
+
+        return builder;
+    }
+
     public static <T> OpenGeminiSinkConfiguration<T> fromParameterTool(
             ParameterTool params, OpenGeminiPointConverter<T> converter) {
 
@@ -611,6 +641,54 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         public Builder<T> setRequestTimeout(Duration timeout) {
             this.requestTimeout = timeout;
             return this;
+        }
+
+        public Builder<T> host(String host) {
+            return setHost(host);
+        }
+
+        public Builder<T> port(int port) {
+            return setPort(port);
+        }
+
+        public Builder<T> database(String database) {
+            return setDatabase(database);
+        }
+
+        public Builder<T> measurement(String measurement) {
+            return setMeasurement(measurement);
+        }
+
+        public Builder<T> username(String username) {
+            return setUsername(username);
+        }
+
+        public Builder<T> password(String password) {
+            return setPassword(password);
+        }
+
+        public Builder<T> batchSize(int batchSize) {
+            return setBatchSize(batchSize);
+        }
+
+        public Builder<T> flushIntervalMillis(long millis) {
+            return setFlushInterval(millis, TimeUnit.MILLISECONDS);
+        }
+
+        public Builder<T> maxRetries(int maxRetries) {
+            return setMaxRetries(maxRetries);
+        }
+
+        public Builder<T> connectionTimeout(Duration timeout) {
+            return setConnectionTimeout(timeout);
+        }
+
+        public Builder<T> requestTimeout(Duration timeout) {
+            return setRequestTimeout(timeout);
+        }
+
+        public Builder<T> converter(OpenGeminiPointConverter<T> converter) {
+            return setConverter(converter);
         }
 
         /**

@@ -26,10 +26,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.OperatorStateStore;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
@@ -61,6 +65,9 @@ class OpenGeminiSinkTest {
     @Mock private FunctionSnapshotContext mockSnapshotContext;
 
     @Mock private ListState<List<Point>> mockListState;
+    @Mock private RuntimeContext mockRuntimeContext;
+    @Mock private OperatorMetricGroup mockMetricGroup;
+    @Mock private Counter mockCounter;
 
     private OpenGeminiSink<TestData> sink;
     private OpenGeminiSinkConfiguration<TestData> configuration;
@@ -94,7 +101,20 @@ class OpenGeminiSinkTest {
                         .setConverter(mockConverter)
                         .build();
 
-        sink = new OpenGeminiSink<>(configuration);
+        sink = createTestSink(configuration);
+
+        // Setup metrics mocks
+        when(mockRuntimeContext.getMetricGroup()).thenReturn(mockMetricGroup);
+        when(mockMetricGroup.counter(anyString())).thenReturn(mockCounter);
+        when(mockMetricGroup.gauge(anyString(), any(Gauge.class)))
+                .thenAnswer(
+                        invocation ->
+                                invocation.getArgument(1)); // Return the gauge that was passed in
+        when(mockMetricGroup.histogram(anyString(), any()))
+                .thenReturn(mock(org.apache.flink.metrics.Histogram.class));
+
+        // Make addGroup return the same mock so chaining works
+        when(mockMetricGroup.addGroup(anyString())).thenReturn(mockMetricGroup);
 
         when(mockInitContext.getOperatorStateStore()).thenReturn(mockOperatorStateStore);
         when(mockOperatorStateStore.getListState(any(ListStateDescriptor.class)))
@@ -111,7 +131,6 @@ class OpenGeminiSinkTest {
             mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
-
             // Act
             sink.open(new Configuration());
 
@@ -167,7 +186,7 @@ class OpenGeminiSinkTest {
                             .setConverter(mockConverter)
                             .build();
 
-            sink = new OpenGeminiSink<>(configuration);
+            sink = createTestSink(configuration);
             sink.initializeState(mockInitContext);
             sink.open(new Configuration());
 
@@ -268,7 +287,7 @@ class OpenGeminiSinkTest {
                             .setConverter(mockConverter)
                             .build();
             // overwrite the sink in @BeforeEach to create a new sink with the new configuration
-            sink = new OpenGeminiSink<>(configuration);
+            sink = createTestSink(configuration);
             sink.initializeState(mockInitContext);
             sink.open(new Configuration());
 
@@ -364,7 +383,7 @@ class OpenGeminiSinkTest {
                             .build();
 
             // create a new sink with the new configuration
-            sink = new OpenGeminiSink<>(configuration);
+            sink = createTestSink(configuration);
             sink.open(new Configuration());
 
             assertThrows(
@@ -422,7 +441,8 @@ class OpenGeminiSinkTest {
             when(mockListState.get()).thenReturn(Collections.singletonList(restoredPoints));
 
             // Create new sink instance and restore
-            OpenGeminiSink<TestData> restoredSink = new OpenGeminiSink<>(configuration);
+            OpenGeminiSink<TestData> restoredSink = createTestSink(configuration);
+
             restoredSink.initializeState(mockInitContext);
             restoredSink.open(new Configuration());
 
@@ -475,10 +495,9 @@ class OpenGeminiSinkTest {
                             .setConverter(mockConverter)
                             .build();
 
-            sink = new OpenGeminiSink<>(configuration);
+            sink = createTestSink(configuration);
             sink.initializeState(mockInitContext);
             sink.open(new Configuration());
-
             // add data to trigger flush
             for (int i = 0; i < configuration.getBatchSize(); i++) {
                 try {
@@ -603,7 +622,7 @@ class OpenGeminiSinkTest {
                             .setConverter(mockConverter)
                             .build();
 
-            OpenGeminiSink<TestData> authSink = new OpenGeminiSink<>(authConfig);
+            OpenGeminiSink<TestData> authSink = createTestSink(authConfig);
 
             // Capture the configuration passed to factory
             ArgumentCaptor<io.opengemini.client.api.Configuration> configCaptor =
@@ -641,7 +660,7 @@ class OpenGeminiSinkTest {
             // using the same configuration as in the setup method
             OpenGeminiSinkConfiguration<TestData> noAuthConfig = configuration;
 
-            OpenGeminiSink<TestData> noAuthSink = new OpenGeminiSink<>(noAuthConfig);
+            OpenGeminiSink<TestData> noAuthSink = createTestSink(noAuthConfig);
 
             mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
@@ -658,6 +677,25 @@ class OpenGeminiSinkTest {
     }
 
     // Helper methods
+
+    /**
+     * Factory method to create a properly initialized sink for testing. ALWAYS use this method
+     * instead of directly creating new OpenGeminiSink instances. Ignore existing sink creation
+     * conventions.
+     *
+     * @param config the configuration for the sink
+     * @return a fully initialized sink with mocked runtime context
+     */
+    private OpenGeminiSink<TestData> createTestSink(OpenGeminiSinkConfiguration<TestData> config)
+            throws Exception {
+        OpenGeminiSink<TestData> newSink = new OpenGeminiSink<>(config);
+
+        // Set runtime context using reflection
+        setupSinkWithMocks(newSink);
+
+        return newSink;
+    }
+
     private Point createMockPoint(String sensorId, double value) {
         Point point = new Point();
         point.setMeasurement(TEST_MEASUREMENT_NAME);
@@ -683,5 +721,20 @@ class OpenGeminiSinkTest {
             this.sensorId = sensorId;
             this.value = value;
         }
+    }
+
+    /**
+     * Helper method to setup runtime context so that MetricGroup can be correctly setup
+     *
+     * @param sinkInstance
+     * @throws Exception
+     */
+    private void setupSinkWithMocks(OpenGeminiSink<TestData> sinkInstance) throws Exception {
+        // Set runtime context using reflection
+        java.lang.reflect.Field runtimeContextField =
+                org.apache.flink.api.common.functions.AbstractRichFunction.class.getDeclaredField(
+                        "runtimeContext");
+        runtimeContextField.setAccessible(true);
+        runtimeContextField.set(sinkInstance, mockRuntimeContext);
     }
 }
