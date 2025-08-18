@@ -22,7 +22,7 @@
         <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
         <maven-surefire-plugin.version>3.2.2</maven-surefire-plugin.version>
         <junit.version>5.10.0</junit.version>
-        <flink.version>1.17.2</flink.version>
+        <flink.version>1.18.1</flink.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <testcontainers.junit.jupiter.version>1.19.3</testcontainers.junit.jupiter.version>
         <awaitility.version>4.2.0</awaitility.version>
@@ -65,6 +65,39 @@
             <artifactId>flink-connector-base</artifactId>
             <version>${flink.version}</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- Table API core -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-api-java</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Table API and DataStream API bridge -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-api-java-bridge</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Table common (includes RowData and types) -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-common</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- For Table API support -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-planner_2.12</artifactId>
+            <version>${flink.version}</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- Flink Clients (For Flink local tests) -->
@@ -175,7 +208,7 @@
                         </googleJavaFormat>
 
                         <!-- Auto delete unused imports -->
-                        <removeUnusedImports />
+                        <removeUnusedImports/>
 
                         <!-- Import order -->
                         <importOrder>

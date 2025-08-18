@@ -167,6 +167,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
 
     /** Register Flink metrics for monitoring */
     private void registerMetrics() {
+        log.info("checking metric group: {}", getRuntimeContext().getMetricGroup());
         MetricGroup metricGroup =
                 getRuntimeContext()
                         .getMetricGroup()
@@ -219,7 +220,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     @Override
     public void invoke(T value, Context context) throws Exception {
         if (value == null) return;
-
+        // TODO: change to line protocol
         Point point = configuration.getConverter().convert(value, configuration.getMeasurement());
         if (point == null) {
             log.debug("Converter returned null for value: {}", value);
@@ -247,7 +248,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         if (currentBatch == null || currentBatch.isEmpty()) {
             return;
         }
-
+        // TODO: race condition
         List<Point> batchToWrite = new ArrayList<>(currentBatch);
         currentBatch.clear();
 
@@ -428,6 +429,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
      * @param context the context for initializing the operator
      * @throws Exception
      */
+    // TODO: check the functionality of checkpointing
     @Override
     public void initializeState(FunctionInitializationContext context) throws Exception {
         ListStateDescriptor<List<Point>> descriptor =
