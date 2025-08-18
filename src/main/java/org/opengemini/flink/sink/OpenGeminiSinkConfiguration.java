@@ -68,6 +68,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     public static final String PROP_REQUEST_TIMEOUT_MS = "opengemini.connector.request.timeout.ms";
 
     // Default values
+    // These values will be overwritten by properties or parameters if provided
     public static final String DEFAULT_HOST = "localhost";
     public static final int DEFAULT_PORT = 8086;
     public static final int DEFAULT_BATCH_SIZE = 5000;
@@ -459,7 +460,8 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
 
         /**
          * Sets the URL of the OpenGemini server. The URL should be in the format: http://host:port
-         * or https://host:port
+         * or https://host:port<br>
+         * Note: This will override any previously set host and port values.
          *
          * @param url The server URL
          * @return The builder instance
