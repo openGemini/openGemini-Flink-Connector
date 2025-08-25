@@ -35,12 +35,12 @@ import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.opengemini.flink.utils.EnhancedOpenGeminiClient;
+import org.opengemini.flink.utils.OpenGeminiClientFactory;
 
 import io.github.openfacade.http.HttpClientConfig;
 import io.opengemini.client.api.Address;
 import io.opengemini.client.api.Point;
-import io.opengemini.client.impl.OpenGeminiClient;
-import io.opengemini.client.impl.OpenGeminiClientFactory;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -58,13 +58,17 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     private final OpenGeminiSinkConfiguration<T> configuration;
 
     // TODO: decouple converter from configuration
-    // Converter for converting input values to OpenGemini Points
-    private OpenGeminiPointConverter<T> converter;
-    private transient ListState<List<Point>> checkpointedState;
+    // if the converter is OpenGeminiLineProtocolConverter, we can use direct conversion
+    // otherwise we need to convert Point to line protocol in invoke method
+    private boolean useDirectConversion = false;
+    // either of lineProtocolConverter or openGeminiPointConverter must be set
+    private OpenGeminiLineProtocolConverter<T> lineProtocolConverter;
+    private OpenGeminiPointConverter<T> pointConverter;
+    private transient ListState<List<String>> checkpointedState;
 
     // Runtime state
-    private transient OpenGeminiClient client;
-    private transient List<Point> currentBatch;
+    private transient EnhancedOpenGeminiClient client;
+    private transient List<String> currentBatch;
     private transient long lastFlushTime;
 
     // Statistics for metrics
@@ -88,22 +92,41 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     public static final String POINTS_PER_SECOND_METRIC = "pointsPerSecond";
     public static final String TOTAL_BYTES_WRITTEN_METRIC = "totalBytesWritten";
 
+    // TODO: decouple converter from configuration, the following method will be removed in the
+    // future
     /**
      * Creates a new OpenGeminiSink with the specified configuration.
      *
      * @param configuration The sink configuration
      */
+    @SuppressWarnings("unchecked")
     public OpenGeminiSink(OpenGeminiSinkConfiguration<T> configuration) {
         this.configuration = configuration;
+        Object converter = configuration.getConverter();
+        if (converter instanceof OpenGeminiLineProtocolConverter) {
+            this.lineProtocolConverter = (OpenGeminiLineProtocolConverter<T>) converter;
+        } else if (converter instanceof OpenGeminiPointConverter) {
+            this.pointConverter = (OpenGeminiPointConverter<T>) converter;
+        } else {
+            throw new IllegalArgumentException(
+                    "Converter must be either OpenGeminiLineProtocolConverter or OpenGeminiPointConverter");
+        }
     }
 
-    // TODO: decouple converter from configuration
     public OpenGeminiSink(
             OpenGeminiSinkConfiguration<T> configuration, OpenGeminiPointConverter<T> converter) {
         this.configuration = configuration;
-        this.converter = converter;
+        this.pointConverter = converter;
     }
 
+    public OpenGeminiSink(
+            OpenGeminiSinkConfiguration<T> configuration,
+            OpenGeminiLineProtocolConverter<T> converter) {
+        this.configuration = configuration;
+        this.lineProtocolConverter = converter;
+    }
+
+    @SuppressWarnings("unchecked")
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
@@ -132,8 +155,18 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                         .httpConfig(httpConfig)
                         .build();
 
-        this.client = OpenGeminiClientFactory.create(clientConfiguration);
+        this.client = OpenGeminiClientFactory.createEnhanced(clientConfiguration);
 
+        if (lineProtocolConverter != null) {
+            this.useDirectConversion = true;
+            log.info("Using direct line protocol conversion mode");
+        } else if (pointConverter != null) {
+            this.useDirectConversion = false;
+            log.info("Using point-based conversion mode");
+        } else {
+            throw new IllegalStateException(
+                    "No converter configured. Either lineProtocolConverter or pointConverter must be set");
+        }
         // Initialize runtime components
         totalBytesWritten = new AtomicLong(0);
         this.totalPointsWritten = new SimpleCounter();
@@ -220,17 +253,34 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     @Override
     public void invoke(T value, Context context) throws Exception {
         if (value == null) return;
-        // TODO: change to line protocol
-        Point point = configuration.getConverter().convert(value, configuration.getMeasurement());
-        if (point == null) {
-            log.debug("Converter returned null for value: {}", value);
-            return;
-        }
+        String lineProtocol;
+        try {
+            if (useDirectConversion) {
+                lineProtocol =
+                        lineProtocolConverter.convertToLineProtocol(
+                                value, configuration.getMeasurement());
+            } else {
+                Point point = pointConverter.convertToPoint(value, configuration.getMeasurement());
+                if (point == null) {
+                    log.debug("Converter returned null point for value: {}", value);
+                    return;
+                }
+                lineProtocol = point.lineProtocol();
+            }
 
-        currentBatch.add(point);
+            if (lineProtocol == null || lineProtocol.isEmpty()) {
+                log.debug("Empty line protocol for value: {}", value);
+                return;
+            }
 
-        if (shouldFlush()) {
-            flush();
+            currentBatch.add(lineProtocol);
+
+            if (shouldFlush()) {
+                flush();
+            }
+        } catch (Exception e) {
+            log.error("Error converting value: {}", value, e);
+            throw e; // or skip based on configuration
         }
     }
 
@@ -249,11 +299,11 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
             return;
         }
         // TODO: race condition
-        List<Point> batchToWrite = new ArrayList<>(currentBatch);
+        List<String> batchToWrite = new ArrayList<>(currentBatch);
         currentBatch.clear();
 
         try {
-            writeBatch(batchToWrite);
+            writeBatchLineProtocols(batchToWrite);
             lastFlushTime = System.currentTimeMillis();
         } catch (Exception e) {
             log.error("Error writing batch to OpenGemini: {}", e.getMessage(), e);
@@ -269,15 +319,15 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     /**
      * Writes a batch of points to OpenGemini. This method handles retries.
      *
-     * @param points
+     * @param lineProtocols a list of line protocol strings to write
      * @throws Exception
      */
-    private void writeBatch(List<Point> points) throws Exception {
-        if (points.isEmpty()) return;
+    private void writeBatchLineProtocols(List<String> lineProtocols) throws Exception {
+        if (lineProtocols.isEmpty()) return;
 
         log.debug(
                 "Writing {} points to {}.{}",
-                points.size(),
+                lineProtocols.size(),
                 configuration.getDatabase(),
                 configuration.getMeasurement());
 
@@ -291,7 +341,8 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 long startTime = System.currentTimeMillis();
 
                 // use async API but wait synchronously for completion
-                CompletableFuture<Void> future = client.write(configuration.getDatabase(), points);
+                CompletableFuture<Void> future =
+                        client.writeLineProtocols(configuration.getDatabase(), lineProtocols);
                 future.get(configuration.getRequestTimeout().toMillis(), TimeUnit.MILLISECONDS);
 
                 long writeTime = System.currentTimeMillis() - startTime;
@@ -301,14 +352,14 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 lastSuccessfulWriteTime.set(System.currentTimeMillis());
 
                 // update statistics
-                totalPointsWritten.inc(points.size());
+                totalPointsWritten.inc(lineProtocols.size());
                 batchesWritten.incrementAndGet();
-                long estimatedBytes = estimatePointsSize(points);
+                long estimatedBytes = calculateLinesSize(lineProtocols);
                 totalBytesWritten.addAndGet(estimatedBytes);
 
                 log.debug(
                         "Successfully wrote batch with {} points in {}ms",
-                        points.size(),
+                        lineProtocols.size(),
                         writeTime);
                 // success
                 return;
@@ -345,16 +396,15 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     }
 
     /**
-     * Used to calculate point size for Flink Metrics
+     * Used to calculate line protocol size for Flink Metrics
      *
-     * @param points
+     * @param lineProtocols
      * @return
      */
-    private long estimatePointsSize(List<Point> points) {
+    private long calculateLinesSize(List<String> lineProtocols) {
         long totalSize = 0;
-        for (Point point : points) {
+        for (String lineProtocol : lineProtocols) {
             // Estimate based on line protocol size
-            String lineProtocol = point.lineProtocol();
             totalSize += lineProtocol.getBytes().length;
         }
         return totalSize;
@@ -432,10 +482,10 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     // TODO: check the functionality of checkpointing
     @Override
     public void initializeState(FunctionInitializationContext context) throws Exception {
-        ListStateDescriptor<List<Point>> descriptor =
+        ListStateDescriptor<List<String>> descriptor =
                 new ListStateDescriptor<>(
                         "opengemini-sink-state",
-                        TypeInformation.of(new TypeHint<List<Point>>() {}));
+                        TypeInformation.of(new TypeHint<List<String>>() {}));
 
         checkpointedState = context.getOperatorStateStore().getListState(descriptor);
 
@@ -447,11 +497,11 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
             // Restore state after a failure
             log.info("Restoring state for OpenGeminiSink");
             int restoredCount = 0;
-            for (List<Point> batch : checkpointedState.get()) {
+            for (List<String> batch : checkpointedState.get()) {
                 currentBatch.addAll(batch);
                 restoredCount += batch.size();
             }
-            log.info("Restored {} points from checkpoint", restoredCount);
+            log.info("Restored {} lines from checkpoint", restoredCount);
         }
     }
 }

@@ -88,7 +88,7 @@ class OpenGeminiDynamicTableSinkFactoryTest {
                 (OpenGeminiDynamicTableSinkFactory.FieldMappingConfig) result;
 
         assertEquals("event_time", fm.getTimestampField());
-        assertEquals("us", fm.getWritePrecision());
+        assertEquals("us", fm.getSourceTimestampPrecision());
         assertFalse(fm.isIgnoreNullValues());
 
         // tags and fields sets should contain trimmed values
@@ -193,14 +193,14 @@ class OpenGeminiDynamicTableSinkFactoryTest {
                         .addTagField("tag2")
                         .addFieldField("field1")
                         .ignoreNullValues(false)
-                        .writePrecision("us")
+                        .sourceTimestampPrecision("us")
                         .build();
 
         assertEquals("ts", config.getTimestampField());
         assertEquals(2, config.getTagFields().size());
         assertTrue(config.getTagFields().contains("tag1"));
         assertFalse(config.isIgnoreNullValues());
-        assertEquals("us", config.getWritePrecision());
+        assertEquals("us", config.getSourceTimestampPrecision());
     }
 
     @Test
@@ -213,7 +213,7 @@ class OpenGeminiDynamicTableSinkFactoryTest {
         assertTrue(config.getTagFields().isEmpty());
         assertTrue(config.getFieldFields().isEmpty());
         assertTrue(config.isIgnoreNullValues()); // Default is true
-        assertEquals("ms", config.getWritePrecision()); // Default is "ms"
+        assertEquals("ms", config.getSourceTimestampPrecision()); // Default is "ms"
     }
 
     @Test
@@ -249,7 +249,7 @@ class OpenGeminiDynamicTableSinkFactoryTest {
         options.put("tag-fields", "tag1,tag2");
         options.put("field-fields", "field1,field2");
         options.put("ignore-null-values", "false");
-        options.put("write-precision", "ns");
+        options.put("source-precision", "ns");
 
         DynamicTableSinkFactory.Context context = createCompleteMockContext(options);
 
@@ -280,6 +280,6 @@ class OpenGeminiDynamicTableSinkFactoryTest {
         assertTrue(fm.getTagFields().isEmpty());
         assertTrue(fm.getFieldFields().isEmpty());
         assertTrue(fm.isIgnoreNullValues()); // Default value
-        assertEquals("ms", fm.getWritePrecision()); // Default value
+        assertEquals("ms", fm.getSourceTimestampPrecision()); // Default value
     }
 }

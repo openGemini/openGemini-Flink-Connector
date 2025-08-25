@@ -25,17 +25,15 @@ import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.sink.SinkFunctionProvider;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.DataType;
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.Preconditions;
+import org.opengemini.flink.sink.OpenGeminiLineProtocolConverter;
 import org.opengemini.flink.sink.OpenGeminiPointConverter;
 import org.opengemini.flink.sink.OpenGeminiSink;
 import org.opengemini.flink.sink.OpenGeminiSinkConfiguration;
 import org.opengemini.flink.table.OpenGeminiDynamicTableSinkFactory.FieldMappingConfig;
 
 import io.opengemini.client.api.Point;
-import io.opengemini.client.api.Precision;
 
 /** Dynamic table sink for OpenGemini that bridges Table API with DataStream API. */
 public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializable {
@@ -43,24 +41,22 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
     private final OpenGeminiSinkConfiguration<RowData> sinkConfiguration;
     private final ResolvedSchema tableSchema;
     private final FieldMappingConfig fieldMapping;
+    private String converterType;
     @Nullable private final Integer parallelism;
 
-    public static final String PRECISION_NANOSECOND = "ns";
-    public static final String PRECISION_MICROSECOND = "us";
-    public static final String PRECISION_MILLISECOND = "ms";
-    public static final String PRECISION_SECOND = "s";
-    public static final String PRECISION_MINUTE = "m";
-    public static final String PRECISION_HOUR = "h";
+    public static final String DEFAULT_CONVERTER_TYPE = "line-protocol";
 
     public OpenGeminiDynamicTableSink(
             OpenGeminiSinkConfiguration<RowData> sinkConfiguration,
             ResolvedSchema tableSchema,
             FieldMappingConfig fieldMapping,
-            @Nullable Integer parallelism) {
+            @Nullable Integer parallelism,
+            String converterType) {
         this.sinkConfiguration = Preconditions.checkNotNull(sinkConfiguration);
         this.tableSchema = Preconditions.checkNotNull(tableSchema);
         this.fieldMapping = Preconditions.checkNotNull(fieldMapping);
         this.parallelism = parallelism;
+        this.converterType = converterType != null ? converterType : DEFAULT_CONVERTER_TYPE;
     }
 
     @Override
@@ -77,26 +73,27 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
 
     @Override
     public SinkRuntimeProvider getSinkRuntimeProvider(Context context) {
-        // Create RowData to Point converter
-        RowDataToPointConverter converter =
-                new RowDataToPointConverter(
-                        tableSchema, fieldMapping, sinkConfiguration.getMeasurement());
+        OpenGeminiSink<RowData> sink;
 
-        // Create a new configuration with the converter
-        OpenGeminiSinkConfiguration<RowData> configWithConverter =
-                sinkConfiguration.toBuilder().converter(converter).build();
+        if ("line-protocol".equals(converterType)) {
+            RowDataToLineProtocolConverter converter =
+                    new RowDataToLineProtocolConverter(
+                            tableSchema, fieldMapping, sinkConfiguration.getMeasurement());
+            sink = new OpenGeminiSink<>(sinkConfiguration, converter);
+        } else {
+            RowDataToPointConverter converter =
+                    new RowDataToPointConverter(
+                            tableSchema, fieldMapping, sinkConfiguration.getMeasurement());
+            sink = new OpenGeminiSink<>(sinkConfiguration, converter);
+        }
 
-        // Create the actual sink function
-        OpenGeminiSink<RowData> sink = new OpenGeminiSink<>(configWithConverter, converter);
-
-        // Return as SinkFunctionProvider with optional parallelism
         return SinkFunctionProvider.of(sink, parallelism);
     }
 
     @Override
     public DynamicTableSink copy() {
         return new OpenGeminiDynamicTableSink(
-                sinkConfiguration, tableSchema, fieldMapping, parallelism);
+                sinkConfiguration, tableSchema, fieldMapping, parallelism, converterType);
     }
 
     @Override
@@ -110,65 +107,16 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
     }
 
     /** Converter that transforms RowData to OpenGemini Point */
-    public static class RowDataToPointConverter
+    public static class RowDataToPointConverter extends AbstractRowDataConverter
             implements OpenGeminiPointConverter<RowData>, Serializable {
-
-        private static final long serialVersionUID = 1L;
-
-        private final FieldMappingConfig fieldMapping;
-        private final String measurement;
-        private final List<String> columnNames;
-        private final List<LogicalType> columnTypes;
-        private final Set<String> tagColumns;
-        private final Set<String> fieldColumns;
-        private final int timestampFieldIndex;
-        private final Map<String, Integer> columnIndexMap;
 
         public RowDataToPointConverter(
                 ResolvedSchema schema, FieldMappingConfig fieldMapping, String measurement) {
-            this.fieldMapping = fieldMapping;
-            this.measurement = measurement;
-
-            // Extract column information
-            this.columnNames = schema.getColumnNames();
-            this.columnTypes =
-                    schema.getColumnDataTypes().stream()
-                            .map(DataType::getLogicalType)
-                            .collect(java.util.stream.Collectors.toList());
-
-            // Build column index map for quick lookup
-            this.columnIndexMap = new HashMap<>();
-            for (int i = 0; i < columnNames.size(); i++) {
-                columnIndexMap.put(columnNames.get(i), i);
-            }
-
-            // Determine tag and field columns
-            this.tagColumns = new HashSet<>(fieldMapping.getTagFields());
-            this.fieldColumns = new HashSet<>();
-
-            if (!fieldMapping.getFieldFields().isEmpty()) {
-                this.fieldColumns.addAll(fieldMapping.getFieldFields());
-            } else {
-                // If not specified, all non-tag columns are field columns
-                for (String col : columnNames) {
-                    if (!tagColumns.contains(col)
-                            && !col.equals(fieldMapping.getTimestampField())) {
-                        fieldColumns.add(col);
-                    }
-                }
-            }
-
-            // Find timestamp field index
-            String timestampField = fieldMapping.getTimestampField();
-            if (timestampField != null && columnIndexMap.containsKey(timestampField)) {
-                this.timestampFieldIndex = columnIndexMap.get(timestampField);
-            } else {
-                this.timestampFieldIndex = -1; // Will use current time
-            }
+            super(schema, fieldMapping, measurement);
         }
 
         @Override
-        public Point convert(RowData rowData, String measurementName) {
+        public Point convertToPoint(RowData rowData, String measurementName) {
             // Skip deleted rows
             if (rowData.getRowKind() == RowKind.DELETE
                     || rowData.getRowKind() == RowKind.UPDATE_BEFORE) {
@@ -200,7 +148,7 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
             }
 
             // Prepare fields map
-            Map<String, Object> fields = new HashMap<>();
+            Map<String, java.lang.Object> fields = new HashMap<>();
             for (String fieldColumn : fieldColumns) {
                 Integer index = columnIndexMap.get(fieldColumn);
                 if (index != null) {
@@ -208,7 +156,8 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
                         continue;
                     }
 
-                    Object value = extractFieldValue(rowData, index, columnTypes.get(index));
+                    java.lang.Object value =
+                            extractFieldValue(rowData, index, columnTypes.get(index));
                     if (value != null) {
                         fields.put(fieldColumn, value);
                     }
@@ -223,131 +172,81 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
 
             return point;
         }
+    }
 
-        private Precision getPrecision() {
-            switch (fieldMapping.getWritePrecision()) {
-                case PRECISION_NANOSECOND:
-                    return Precision.PRECISIONNANOSECOND;
-                case PRECISION_MICROSECOND:
-                    return Precision.PRECISIONMICROSECOND;
-                case PRECISION_MILLISECOND:
-                    return Precision.PRECISIONMILLISECOND;
-                case PRECISION_SECOND:
-                    return Precision.PRECISIONSECOND;
-                case PRECISION_MINUTE:
-                    return Precision.PRECISIONMINUTE;
-                case PRECISION_HOUR:
-                    return Precision.PRECISIONHOUR;
-                default:
-                    return Precision.PRECISIONMILLISECOND;
-            }
+    public static class RowDataToLineProtocolConverter extends AbstractRowDataConverter
+            implements OpenGeminiLineProtocolConverter<RowData>, Serializable {
+
+        public RowDataToLineProtocolConverter(
+                ResolvedSchema schema, FieldMappingConfig fieldMapping, String measurement) {
+            super(schema, fieldMapping, measurement);
         }
 
-        private long extractTimestamp(RowData rowData) {
-            if (timestampFieldIndex >= 0 && !rowData.isNullAt(timestampFieldIndex)) {
-                LogicalType type = columnTypes.get(timestampFieldIndex);
-                switch (type.getTypeRoot()) {
-                    case TIMESTAMP_WITHOUT_TIME_ZONE:
-                    case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                        // Flink timestamps are in milliseconds
-                        return rowData.getTimestamp(timestampFieldIndex, 3).getMillisecond();
-                    case TIMESTAMP_WITH_TIME_ZONE:
-                        return rowData.getTimestamp(timestampFieldIndex, 3).getMillisecond();
-                    case BIGINT:
-                        // Assume bigint timestamps are in the configured precision
-                        long ts = rowData.getLong(timestampFieldIndex);
-                        return convertToNanos(ts);
-                    default:
-                        // Fallback to current time
-                        return System.currentTimeMillis();
+        @Override
+        public String convertToLineProtocol(RowData rowData, String measurementName) {
+            if (rowData.getRowKind() == RowKind.DELETE
+                    || rowData.getRowKind() == RowKind.UPDATE_BEFORE) {
+                return null;
+            }
+
+            StringBuilder sb = new StringBuilder();
+
+            // Measurement
+            sb.append(measurement);
+
+            // Tags - directly append
+            for (String tagColumn : tagColumns) {
+                Integer index = columnIndexMap.get(tagColumn);
+                if (index != null && !rowData.isNullAt(index)) {
+                    String tagValue = extractStringValue(rowData, index, columnTypes.get(index));
+                    if (tagValue != null) {
+                        sb.append(',').append(tagColumn).append('=').append(escape(tagValue));
+                    }
                 }
             }
-            // Use current time if no timestamp field
-            return System.currentTimeMillis();
+
+            // Fields - direct append
+            sb.append(' ');
+            StringJoiner fieldJoiner = new StringJoiner(",");
+            for (String fieldColumn : fieldColumns) {
+                Integer index = columnIndexMap.get(fieldColumn);
+                if (index != null && !rowData.isNullAt(index)) {
+                    Object value = extractFieldValue(rowData, index, columnTypes.get(index));
+                    if (value != null) {
+                        fieldJoiner.add(formatField(fieldColumn, value));
+                    }
+                }
+            }
+
+            if (fieldJoiner.length() == 0) {
+                fieldJoiner.add("_empty=true");
+            }
+            sb.append(fieldJoiner.toString());
+
+            // Timestamp
+            sb.append(' ').append(extractTimestamp(rowData));
+
+            return sb.toString();
         }
 
-        private String extractStringValue(RowData rowData, int index, LogicalType type) {
-            if (rowData.isNullAt(index)) {
-                return null;
-            }
-
-            switch (type.getTypeRoot()) {
-                case VARCHAR:
-                case CHAR:
-                    return rowData.getString(index).toString();
-                case BOOLEAN:
-                    return String.valueOf(rowData.getBoolean(index));
-                case TINYINT:
-                    return String.valueOf(rowData.getByte(index));
-                case SMALLINT:
-                    return String.valueOf(rowData.getShort(index));
-                case INTEGER:
-                    return String.valueOf(rowData.getInt(index));
-                case BIGINT:
-                    return String.valueOf(rowData.getLong(index));
-                case FLOAT:
-                    return String.valueOf(rowData.getFloat(index));
-                case DOUBLE:
-                    return String.valueOf(rowData.getDouble(index));
-                default:
-                    return rowData.getString(index).toString();
-            }
+        private String escape(String value) {
+            // Line protocol escaping for spaces, commas, and equal signs
+            return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=");
         }
 
-        private Object extractFieldValue(RowData rowData, int index, LogicalType type) {
-            if (rowData.isNullAt(index)) {
-                return null;
+        private String formatField(String name, Object value) {
+            if (value instanceof String) {
+                return name + "=\"" + ((String) value).replace("\"", "\\\"") + "\"";
+            } else if (value instanceof Boolean) {
+                return name + "=" + value;
+            } else if (value instanceof Number) {
+                if (value instanceof Float || value instanceof Double) {
+                    return name + "=" + value;
+                } else {
+                    return name + "=" + value + "i"; // integer will need an 'i' suffix
+                }
             }
-
-            switch (type.getTypeRoot()) {
-                case BOOLEAN:
-                    return rowData.getBoolean(index);
-                case TINYINT:
-                    return (int) rowData.getByte(index);
-                case SMALLINT:
-                    return (int) rowData.getShort(index);
-                case INTEGER:
-                    return rowData.getInt(index);
-                case BIGINT:
-                    return rowData.getLong(index);
-                case FLOAT:
-                    return rowData.getFloat(index);
-                case DOUBLE:
-                    return rowData.getDouble(index);
-                case VARCHAR:
-                case CHAR:
-                    return rowData.getString(index).toString();
-                case DECIMAL:
-                    return rowData.getDecimal(
-                            index,
-                            ((org.apache.flink.table.types.logical.DecimalType) type)
-                                    .getPrecision(),
-                            ((org.apache.flink.table.types.logical.DecimalType) type).getScale());
-                case TIMESTAMP_WITHOUT_TIME_ZONE:
-                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                case TIMESTAMP_WITH_TIME_ZONE:
-                    // Convert timestamp to string in ISO format
-                    return rowData.getTimestamp(index, 3).toLocalDateTime().toString();
-                default:
-                    // Fallback to string representation
-                    return rowData.getString(index).toString();
-            }
-        }
-
-        private long convertToNanos(long timestamp) {
-            // Convert based on configured precision to nanoseconds
-            switch (fieldMapping.getWritePrecision()) {
-                case PRECISION_NANOSECOND:
-                    return timestamp;
-                case PRECISION_MICROSECOND:
-                    return timestamp * 1000;
-                case PRECISION_MILLISECOND:
-                    return timestamp * 1_000_000;
-                case PRECISION_SECOND:
-                    return timestamp * 1_000_000_000;
-                default:
-                    return timestamp * 1_000_000; // Default ms
-            }
+            return name + "=\"" + value.toString() + "\"";
         }
     }
 }

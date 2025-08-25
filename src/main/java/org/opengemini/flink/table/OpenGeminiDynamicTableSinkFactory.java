@@ -27,10 +27,7 @@ import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.FactoryUtil;
-import org.opengemini.flink.sink.OpenGeminiPointConverter;
 import org.opengemini.flink.sink.OpenGeminiSinkConfiguration;
-
-import io.opengemini.client.api.Point;
 
 /** Factory for creating OpenGemini table sink in Table API/SQL. */
 public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactory {
@@ -137,10 +134,18 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
                     .withDescription("Whether to ignore null values when writing");
 
     public static final ConfigOption<String> WRITE_PRECISION =
-            ConfigOptions.key("write-precision")
+            ConfigOptions.key("source-precision")
                     .stringType()
                     .defaultValue("ms")
-                    .withDescription("Timestamp precision: ns, us, ms, s, m, h");
+                    .withDescription("The precision of source timestamp: ns, us, ms, s, m, h");
+
+    public static final ConfigOption<String> CONVERTER_TYPE =
+            ConfigOptions.key("converter.type")
+                    .stringType()
+                    .defaultValue(
+                            "line-protocol") // use high performance line protocol converter by
+                    // default
+                    .withDescription("Converter type: 'line-protocol' or 'point'");
 
     @Override
     public String factoryIdentifier() {
@@ -184,6 +189,9 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
         // Add standard Flink options
         optional.add(FactoryUtil.SINK_PARALLELISM);
 
+        // Converter type
+        optional.add(CONVERTER_TYPE);
+
         return optional;
     }
 
@@ -195,7 +203,6 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
 
         ReadableConfig config = helper.getOptions();
 
-        // Build configuration - THE PROBLEM IS HERE!
         OpenGeminiSinkConfiguration.Builder<RowData> configBuilder =
                 OpenGeminiSinkConfiguration.<RowData>builder()
                         .host(config.get(HOST))
@@ -215,33 +222,18 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
             configBuilder.username(username).password(password);
         }
 
-        // TODO: this problem is caused by coupling of config and converter. will be fixed
-        // Create a placeholder converter - it will be replaced in the sink
-        OpenGeminiPointConverter<RowData> placeholderConverter =
-                new OpenGeminiPointConverter<RowData>() {
-                    @Override
-                    public Point convert(RowData element, String measurement) {
-                        return null;
-                    }
-                };
-
-        OpenGeminiSinkConfiguration<RowData> sinkConfig =
-                configBuilder
-                        .converter(placeholderConverter) // Use placeholder instead of null
-                        .build();
+        OpenGeminiSinkConfiguration<RowData> sinkConfig = configBuilder.build();
 
         // Extract field mapping
         FieldMappingConfig fieldMapping = extractFieldMapping(config, context);
         Integer parallelism = config.getOptional(FactoryUtil.SINK_PARALLELISM).orElse(null);
 
-        DynamicTableSink sink =
-                new OpenGeminiDynamicTableSink(
-                        sinkConfig,
-                        context.getCatalogTable().getResolvedSchema(),
-                        fieldMapping,
-                        parallelism);
-
-        return sink;
+        return new OpenGeminiDynamicTableSink(
+                sinkConfig,
+                context.getCatalogTable().getResolvedSchema(),
+                fieldMapping,
+                parallelism,
+                config.get(CONVERTER_TYPE));
     }
 
     /** Extract field mapping configuration from options */
@@ -273,7 +265,7 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
 
         // Set other options
         builder.ignoreNullValues(config.get(IGNORE_NULL_VALUES));
-        builder.writePrecision(config.get(WRITE_PRECISION));
+        builder.sourceTimestampPrecision(config.get(WRITE_PRECISION));
 
         return builder.build();
     }
@@ -285,14 +277,14 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
         private final Set<String> tagFields;
         private final Set<String> fieldFields;
         private final boolean ignoreNullValues;
-        private final String writePrecision;
+        private final String sourceTimestampPrecision;
 
         private FieldMappingConfig(Builder builder) {
             this.timestampField = builder.timestampField;
             this.tagFields = builder.tagFields;
             this.fieldFields = builder.fieldFields;
             this.ignoreNullValues = builder.ignoreNullValues;
-            this.writePrecision = builder.writePrecision;
+            this.sourceTimestampPrecision = builder.sourceTimestampPrecision;
         }
 
         // Getters
@@ -312,8 +304,8 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
             return ignoreNullValues;
         }
 
-        public String getWritePrecision() {
-            return writePrecision;
+        public String getSourceTimestampPrecision() {
+            return sourceTimestampPrecision;
         }
 
         public static Builder builder() {
@@ -325,7 +317,7 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
             private Set<String> tagFields = new HashSet<>();
             private Set<String> fieldFields = new HashSet<>();
             private boolean ignoreNullValues = true;
-            private String writePrecision = "ms";
+            private String sourceTimestampPrecision = "ms";
 
             public Builder timestampField(String field) {
                 this.timestampField = field;
@@ -347,8 +339,8 @@ public class OpenGeminiDynamicTableSinkFactory implements DynamicTableSinkFactor
                 return this;
             }
 
-            public Builder writePrecision(String precision) {
-                this.writePrecision = precision;
+            public Builder sourceTimestampPrecision(String precision) {
+                this.sourceTimestampPrecision = precision;
                 return this;
             }
 

@@ -28,10 +28,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.util.function.SerializableFunction;
 import org.junit.jupiter.api.*;
-import org.opengemini.flink.sink.OpenGeminiPointConverter;
-import org.opengemini.flink.sink.OpenGeminiSink;
-import org.opengemini.flink.sink.OpenGeminiSinkConfiguration;
-import org.opengemini.flink.sink.SimpleOpenGeminiPointConverter;
+import org.opengemini.flink.sink.*;
 import org.opengemini.flink.sink.e2e.model.SensorData;
 import org.opengemini.flink.sink.e2e.utils.SensorDataGenerator;
 import org.testcontainers.containers.GenericContainer;
@@ -161,14 +158,16 @@ public class OpenGeminiSinkE2ETest {
                                 (SerializableFunction<SensorData, String>) SensorData::getLocation)
                         .addField(
                                 "temperature",
-                                (SerializableFunction<SensorData, Object>)
+                                (SerializableFunction<SensorData, java.lang.Object>)
                                         SensorData::getTemperature)
                         .addField(
                                 "humidity",
-                                (SerializableFunction<SensorData, Object>) SensorData::getHumidity)
+                                (SerializableFunction<SensorData, java.lang.Object>)
+                                        SensorData::getHumidity)
                         .addField(
                                 "pressure",
-                                (SerializableFunction<SensorData, Object>) SensorData::getPressure)
+                                (SerializableFunction<SensorData, java.lang.Object>)
+                                        SensorData::getPressure)
                         .withTimestampMillis(
                                 (SerializableFunction<SensorData, Long>) SensorData::getTimestamp)
                         .build();
@@ -279,29 +278,192 @@ public class OpenGeminiSinkE2ETest {
                         });
     }
 
-    // Helper methods
+    @Test
+    @DisplayName("Test Line Protocol converter for high performance")
+    void testLineProtocolConverter() throws Exception {
+        OpenGeminiLineProtocolConverter<SensorData> lineProtocolConverter =
+                new OpenGeminiLineProtocolConverter<SensorData>() {
+                    @Override
+                    public String convertToLineProtocol(SensorData data, String measurement) {
+                        return String.format(
+                                "%s,sensor_id=%s,location=%s temperature=%f,humidity=%f,pressure=%f %d",
+                                measurement,
+                                data.getSensorId(),
+                                data.getLocation().replace(" ", "\\ "),
+                                data.getTemperature(),
+                                data.getHumidity(),
+                                data.getPressure(),
+                                data.getTimestamp() * 1_000_000L);
+                    }
+                };
 
-    private OpenGeminiPointConverter<SensorData> createDefaultConverter() {
-        return SimpleOpenGeminiPointConverter.<SensorData>builder()
-                .addTag(
-                        "sensor_id",
-                        (SerializableFunction<SensorData, String>) SensorData::getSensorId)
-                .addTag(
-                        "location",
-                        (SerializableFunction<SensorData, String>) SensorData::getLocation)
-                .addField(
-                        "temperature",
-                        (SerializableFunction<SensorData, Object>) SensorData::getTemperature)
-                .addField(
-                        "humidity",
-                        (SerializableFunction<SensorData, Object>) SensorData::getHumidity)
-                .addField(
-                        "pressure",
-                        (SerializableFunction<SensorData, Object>) SensorData::getPressure)
-                .withTimestampMillis(
-                        (SerializableFunction<SensorData, Long>) SensorData::getTimestamp)
-                .build();
+        OpenGeminiSinkConfiguration<SensorData> config =
+                OpenGeminiSinkConfiguration.<SensorData>builder()
+                        .setUrl(openGeminiUrl)
+                        .setDatabase(TEST_DATABASE)
+                        .setMeasurement(TEST_MEASUREMENT)
+                        .setBatchSize(10)
+                        .setFlushInterval(100, TimeUnit.MILLISECONDS)
+                        .build();
+
+        OpenGeminiSink<SensorData> sink = new OpenGeminiSink<>(config, lineProtocolConverter);
+
+        // Setup Flink environment
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+
+        // Generate test data
+        long numberOfRecords = 100;
+        env.addSource(new SensorDataGenerator(numberOfRecords, 10)).addSink(sink);
+
+        // Execute
+        CompletableFuture<Void> jobFuture =
+                CompletableFuture.runAsync(
+                        () -> {
+                            try {
+                                env.execute("Line Protocol E2E Test");
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        });
+
+        // Wait for data to be written
+        await().atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(
+                        () -> {
+                            long count = countRecords();
+                            log.info("Current record count (Line Protocol): {}", count);
+                            assertThat(count).isEqualTo(numberOfRecords);
+                        });
+
+        // Verify data integrity
+        verifyDataIntegrity();
+        log.info("Line Protocol converter test passed successfully");
     }
+
+    @Test
+    @DisplayName("Test SimpleLineProtocolConverter builder pattern")
+    void testSimpleLineProtocolConverter() throws Exception {
+        OpenGeminiLineProtocolConverter<SensorData> converter =
+                SimpleOpenGeminiLineProtocolConverter.<SensorData>builder()
+                        .addTag("sensor_id", SensorData::getSensorId)
+                        .addTag("location", SensorData::getLocation)
+                        .addField("temperature", data -> data.getTemperature())
+                        .addField("humidity", data -> data.getHumidity())
+                        .addField("pressure", data -> data.getPressure())
+                        .withTimestampMillis(SensorData::getTimestamp)
+                        .build();
+
+        OpenGeminiSinkConfiguration<SensorData> config =
+                OpenGeminiSinkConfiguration.<SensorData>builder()
+                        .setUrl(openGeminiUrl)
+                        .setDatabase(TEST_DATABASE)
+                        .setMeasurement("sensor_data_lp")
+                        .setBatchSize(20)
+                        .setFlushInterval(200, TimeUnit.MILLISECONDS)
+                        .build();
+
+        OpenGeminiSink<SensorData> sink = new OpenGeminiSink<>(config, converter);
+
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+
+        long numberOfRecords = 50;
+        env.addSource(new SensorDataGenerator(numberOfRecords, 10)).addSink(sink);
+
+        env.execute("Simple Line Protocol Converter Test");
+
+        // Verify
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(
+                        () -> {
+                            String countQuery = "SELECT COUNT(*) FROM sensor_data_lp";
+                            Query query = new Query(countQuery);
+                            query.setDatabase(TEST_DATABASE);
+                            QueryResult result = client.query(query).get(5, TimeUnit.SECONDS);
+
+                            long count = 0;
+                            if (!result.getResults().isEmpty()
+                                    && result.getResults().get(0).getSeries() != null
+                                    && !result.getResults().get(0).getSeries().isEmpty()) {
+                                List<List<Object>> values =
+                                        result.getResults().get(0).getSeries().get(0).getValues();
+                                if (!values.isEmpty() && !values.get(0).isEmpty()) {
+                                    count = ((Number) values.get(0).get(1)).longValue();
+                                }
+                            }
+
+                            assertThat(count).isEqualTo(numberOfRecords);
+                        });
+    }
+
+    @Test
+    @DisplayName("Test Line Protocol with complex data types")
+    void testLineProtocolWithComplexTypes() throws Exception {
+        OpenGeminiLineProtocolConverter<ComplexTestData> converter =
+                new OpenGeminiLineProtocolConverter<ComplexTestData>() {
+                    @Override
+                    public String convertToLineProtocol(ComplexTestData data, String measurement) {
+                        return String.format(
+                                "%s,id=%s,category=%s intValue=%di,longValue=%di,floatValue=%f,doubleValue=%f,boolValue=%s,stringValue=\"%s\" %d",
+                                measurement,
+                                data.getId(),
+                                data.getCategory(),
+                                data.getIntValue(),
+                                data.getLongValue(),
+                                data.getFloatValue(),
+                                data.getDoubleValue(),
+                                data.isBoolValue(),
+                                data.getStringValue().replace("\"", "\\\""),
+                                data.getTimestamp() * 1_000_000L);
+                    }
+                };
+
+        OpenGeminiSinkConfiguration<ComplexTestData> config =
+                OpenGeminiSinkConfiguration.<ComplexTestData>builder()
+                        .setUrl(openGeminiUrl)
+                        .setDatabase(TEST_DATABASE)
+                        .setMeasurement("complex_data_lp")
+                        .setBatchSize(50)
+                        .build();
+
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+
+        env.addSource(new ComplexDataGenerator(30))
+                .addSink(new OpenGeminiSink<>(config, converter));
+
+        env.execute("Complex Line Protocol Test");
+
+        // Verify all data types are correctly stored
+        await().atMost(Duration.ofSeconds(10))
+                .untilAsserted(
+                        () -> {
+                            String query = "SELECT * FROM complex_data_lp LIMIT 1";
+                            Query resultQuery = new Query(query);
+                            resultQuery.setDatabase(TEST_DATABASE);
+                            QueryResult result = client.query(resultQuery).get();
+
+                            assertThat(result.getResults()).isNotEmpty();
+                            List<Series> series = result.getResults().get(0).getSeries();
+                            assertThat(series).isNotEmpty();
+
+                            // verify that all expected columns are present
+                            List<String> columns = series.get(0).getColumns();
+                            assertThat(columns)
+                                    .containsAll(
+                                            Arrays.asList(
+                                                    "intValue",
+                                                    "longValue",
+                                                    "floatValue",
+                                                    "doubleValue",
+                                                    "boolValue",
+                                                    "stringValue"));
+                        });
+    }
+
+    // Helper methods
 
     private long countRecords() throws Exception {
         String countQuery = String.format("SELECT COUNT(*) FROM %s", TEST_MEASUREMENT);
@@ -317,7 +479,8 @@ public class OpenGeminiSinkE2ETest {
             return 0;
         }
 
-        List<List<Object>> values = result.getResults().get(0).getSeries().get(0).getValues();
+        List<List<java.lang.Object>> values =
+                result.getResults().get(0).getSeries().get(0).getValues();
         if (values.isEmpty() || values.get(0).isEmpty()) {
             return 0;
         }

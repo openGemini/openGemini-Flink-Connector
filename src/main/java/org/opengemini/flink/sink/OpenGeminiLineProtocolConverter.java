@@ -17,21 +17,19 @@ package org.opengemini.flink.sink;
 
 import java.io.Serializable;
 
-import io.opengemini.client.api.Point;
-
 /**
- * Enhanced converter interface for converting objects to OpenGemini Points. This provides better
- * integration with the OpenGemini client.
+ * Enhanced converter interface for converting objects to OpenGemini line protocol. This provides
+ * better integration with the OpenGemini client.
  *
  * @param <T> The type of object to convert
  */
-public interface OpenGeminiPointConverter<T> extends Serializable {
+public interface OpenGeminiLineProtocolConverter<T> extends Serializable {
     /**
-     * Convert an object to an OpenGemini Point.
+     * Convert an object to a line protocol string for OpenGemini.
      *
      * @param value The value to convert
      * @param measurement The measurement name
-     * @return The converted Point, or null if the value should be skipped
+     * @return The converted line protocol string, or null if the value should be skipped
      */
-    Point convertToPoint(T value, String measurement) throws Exception;
+    String convertToLineProtocol(T value, String measurement) throws Exception;
 }

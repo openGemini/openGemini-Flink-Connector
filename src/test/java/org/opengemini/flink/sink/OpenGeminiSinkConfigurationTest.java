@@ -104,19 +104,6 @@ class OpenGeminiSinkConfigurationTest {
     }
 
     @Test
-    void testMissingConverterThrows() {
-        IllegalArgumentException ex =
-                assertThrows(
-                        IllegalArgumentException.class,
-                        () ->
-                                OpenGeminiSinkConfiguration.<String>builder()
-                                        .setDatabase("db")
-                                        .setMeasurement("m")
-                                        .build());
-        assertEquals("Converter must be provided", ex.getMessage());
-    }
-
-    @Test
     void testInvalidBatchSizeThrows() {
         IllegalArgumentException ex =
                 assertThrows(
@@ -202,18 +189,6 @@ class OpenGeminiSinkConfigurationTest {
                 IllegalArgumentException.class,
                 () -> OpenGeminiSinkConfiguration.<String>builder().setBatchSize(-1).build(),
                 "Batch size must be positive");
-    }
-
-    @Test
-    void testSetPointConverterAlias() {
-        OpenGeminiSinkConfiguration<String> config =
-                OpenGeminiSinkConfiguration.<String>builder()
-                        .setDatabase("db")
-                        .setMeasurement("m")
-                        .setPointConverter(mockConverter) // Using alias method
-                        .build();
-
-        assertEquals(mockConverter, config.getConverter());
     }
 
     @Test

@@ -48,7 +48,7 @@ class SimpleOpenGeminiPointConverterTest {
                 SimpleOpenGeminiPointConverter.<TestData>builder()
                         .addField("f", d -> d.field)
                         .build();
-        assertNull(converter.convert(null, "m"));
+        assertNull(converter.convertToPoint(null, "m"));
     }
 
     @Test
@@ -68,7 +68,7 @@ class SimpleOpenGeminiPointConverterTest {
                         .addField("field1", dd -> dd.field)
                         .build();
 
-        Point p = converter.convert(t, "measurement1");
+        Point p = converter.convertToPoint(t, "measurement1");
         assertNotNull(p);
         assertEquals("measurement1", p.getMeasurement());
         Map<String, String> tags = p.getTags();
@@ -88,7 +88,7 @@ class SimpleOpenGeminiPointConverterTest {
                         .addField("f", dd -> dd.field)
                         .build();
 
-        Point p = converter.convert(t, "m");
+        Point p = converter.convertToPoint(t, "m");
         assertNotNull(p);
         assertNull(p.getTags());
         assertEquals(Collections.singletonMap("f", 100), p.getFields());
@@ -103,7 +103,7 @@ class SimpleOpenGeminiPointConverterTest {
                         .withTimestampMillis(dd -> dd.timestampMillis)
                         .build();
 
-        Point p = converter.convert(t, "m");
+        Point p = converter.convertToPoint(t, "m");
         assertEquals(12345L * 1_000_000L, p.getTime());
     }
 
@@ -117,7 +117,7 @@ class SimpleOpenGeminiPointConverterTest {
                         .withTimestampInstant(dd -> dd.timestampInstant)
                         .build();
 
-        Point p = converter.convert(t, "m");
+        Point p = converter.convertToPoint(t, "m");
         assertEquals(9999L * 1_000_000L, p.getTime());
     }
 
@@ -134,7 +134,8 @@ class SimpleOpenGeminiPointConverterTest {
                         .addField("f", dd -> dd.field)
                         .build();
 
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> converter.convert(t, "m"));
+        RuntimeException ex =
+                assertThrows(RuntimeException.class, () -> converter.convertToPoint(t, "m"));
         assertTrue(ex.getMessage().contains("Error extracting tag badTag"));
     }
 
@@ -150,7 +151,8 @@ class SimpleOpenGeminiPointConverterTest {
                         .addField("badField", badField)
                         .build();
 
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> converter.convert(t, "m"));
+        RuntimeException ex =
+                assertThrows(RuntimeException.class, () -> converter.convertToPoint(t, "m"));
         assertTrue(ex.getMessage().contains("Error extracting field badField"));
     }
 
@@ -162,6 +164,6 @@ class SimpleOpenGeminiPointConverterTest {
                         .addField("f", dd -> null)
                         .build();
 
-        assertNull(converter.convert(t, "m"));
+        assertNull(converter.convertToPoint(t, "m"));
     }
 }

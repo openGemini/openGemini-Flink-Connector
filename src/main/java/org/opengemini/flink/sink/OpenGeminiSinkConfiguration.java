@@ -47,7 +47,8 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     private final int maxRetries;
 
     // Converter configuration
-    private final OpenGeminiPointConverter<T> converter;
+    // MUST be either OpenGeminiLineProtocolConverter or OpenGeminiPointConverter
+    private final Object converter;
 
     // Timeout configuration
     private final Duration connectionTimeout;
@@ -99,95 +100,6 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     }
 
     /**
-     * Creates configuration from default properties file. This method will search for
-     * "opengemini-connector.properties" in the following order: 1. Current working directory 2.
-     * Classpath (typically in src/main/resources)
-     *
-     * @param converter The point converter
-     * @return Configuration instance
-     * @throws IOException if the properties file cannot be found or read
-     *     <p>Example usage:
-     *     <pre>
-     * // Will automatically find and load opengemini-connector.properties
-     * OpenGeminiSinkConfiguration config =
-     *     OpenGeminiSinkConfiguration.createDefaultConfiguration(converter);
-     * </pre>
-     */
-    public static <T> OpenGeminiSinkConfiguration<T> createDefaultConfiguration(
-            OpenGeminiPointConverter<T> converter) throws IOException {
-
-        Properties props = new Properties();
-        boolean loaded = false;
-
-        // 1. Check current working directory
-        File localFile = new File(DEFAULT_CONFIG_FILE_NAME);
-        if (localFile.exists() && localFile.isFile()) {
-            try (FileInputStream fis = new FileInputStream(localFile)) {
-                props.load(fis);
-                loaded = true;
-            }
-        }
-
-        // 2. Check classpath
-        if (!loaded) {
-            try (InputStream is =
-                    OpenGeminiSinkConfiguration.class
-                            .getClassLoader()
-                            .getResourceAsStream(DEFAULT_CONFIG_FILE_NAME)) {
-                if (is != null) {
-                    props.load(is);
-                    loaded = true;
-                }
-            }
-        }
-
-        // 3. If still not found, throw exception
-        if (!loaded) {
-            throw new IOException(
-                    "Default configuration file '"
-                            + DEFAULT_CONFIG_FILE_NAME
-                            + "' not found. "
-                            + "Searched in: current directory and classpath");
-        }
-
-        return fromProperties(props, converter);
-    }
-
-    /**
-     * Creates configuration from default properties file with fallback to provided defaults. If the
-     * default properties file is not found, uses the provided default properties.
-     *
-     * @param converter The point converter
-     * @param fallbackProps Fallback properties to use if default file is not found
-     * @return Configuration instance
-     *     <p>Example usage:
-     *     <pre>
-     * Properties fallback = new Properties();
-     * fallback.setProperty("opengemini.database", "mydb");
-     * fallback.setProperty("opengemini.measurement", "mymeasurement");
-     *
-     * OpenGeminiSinkConfiguration config =
-     *     OpenGeminiSinkConfiguration.createDefaultConfiguration(converter, fallback);
-     * </pre>
-     */
-    public static <T> OpenGeminiSinkConfiguration<T> createDefaultConfiguration(
-            OpenGeminiPointConverter<T> converter, Properties fallbackProps) {
-
-        try {
-            // Try to load from default locations
-            return createDefaultConfiguration(converter);
-        } catch (IOException e) {
-            // Fall back to provided properties
-            if (fallbackProps == null) {
-                throw new IllegalArgumentException(
-                        "Default configuration file not found and no fallback properties provided",
-                        e);
-            }
-            return fromProperties(fallbackProps, converter);
-        }
-    }
-
-    /**
      * Creates a new builder from this configuration. This is useful for modifying existing
      * configurations.
      *
@@ -218,7 +130,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     }
 
     public static <T> OpenGeminiSinkConfiguration<T> fromParameterTool(
-            ParameterTool params, OpenGeminiPointConverter<T> converter) {
+            ParameterTool params, Object converter) {
 
         // verify required params
         if (!params.has(PROP_DATABASE)) {
@@ -263,7 +175,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     }
 
     public static <T> OpenGeminiSinkConfiguration<T> fromProperties(
-            Properties props, OpenGeminiPointConverter<T> converter) {
+            Properties props, Object converter) {
 
         // verify required params
         String database = props.getProperty(PROP_DATABASE);
@@ -330,7 +242,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
     }
 
     public static <T> OpenGeminiSinkConfiguration<T> fromMixedSources(
-            ParameterTool params, Properties props, OpenGeminiPointConverter<T> converter) {
+            ParameterTool params, Properties props, Object converter) {
 
         Properties merged = new Properties();
 
@@ -366,7 +278,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
      * </pre>
      */
     public static <T> OpenGeminiSinkConfiguration<T> fromPropertiesFile(
-            String propertiesFile, OpenGeminiPointConverter<T> converter) throws IOException {
+            String propertiesFile, Object converter) throws IOException {
 
         Properties props = new Properties();
         try (FileInputStream fis = new FileInputStream(propertiesFile)) {
@@ -385,7 +297,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
      * @throws IOException if reading the file fails
      */
     public static <T> OpenGeminiSinkConfiguration<T> fromPropertiesFile(
-            File propertiesFile, OpenGeminiPointConverter<T> converter) throws IOException {
+            File propertiesFile, Object converter) throws IOException {
 
         Properties props = new Properties();
         try (FileInputStream fis = new FileInputStream(propertiesFile)) {
@@ -431,7 +343,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         return maxRetries;
     }
 
-    public OpenGeminiPointConverter<T> getConverter() {
+    public Object getConverter() {
         return converter;
     }
 
@@ -462,7 +374,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         private long flushIntervalMillis =
                 DEFAULT_FLUSH_INTERVAL_MS; // Optimized based on benchmark
         private int maxRetries = DEFAULT_MAX_RETRIES;
-        private OpenGeminiPointConverter<T> converter;
+        private Object converter;
         private Duration connectionTimeout = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS);
         private Duration requestTimeout = Duration.ofSeconds(DEFAULT_REQUEST_TIMEOUT_SECONDS);
 
@@ -605,18 +517,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
          * @param converter The point converter
          * @return The builder instance
          */
-        public Builder<T> setConverter(OpenGeminiPointConverter<T> converter) {
-            this.converter = converter;
-            return this;
-        }
-
-        /**
-         * Sets the converter for transforming input elements to OpenGemini points (alias method).
-         *
-         * @param converter The point converter
-         * @return The builder instance
-         */
-        public Builder<T> setPointConverter(OpenGeminiPointConverter<T> converter) {
+        public Builder<T> setConverter(Object converter) {
             this.converter = converter;
             return this;
         }
@@ -687,7 +588,7 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
             return setRequestTimeout(timeout);
         }
 
-        public Builder<T> converter(OpenGeminiPointConverter<T> converter) {
+        public Builder<T> converter(Object converter) {
             return setConverter(converter);
         }
 
@@ -703,9 +604,6 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
             }
             if (measurement == null || measurement.isEmpty()) {
                 throw new IllegalArgumentException("Measurement must be provided");
-            }
-            if (converter == null) {
-                throw new IllegalArgumentException("Converter must be provided");
             }
 
             return new OpenGeminiSinkConfiguration<>(this);
