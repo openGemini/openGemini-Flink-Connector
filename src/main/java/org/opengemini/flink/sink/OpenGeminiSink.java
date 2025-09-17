@@ -57,6 +57,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     // Configuration
     private final OpenGeminiSinkConfiguration<T> configuration;
 
+    // TODO: decouple converter from configuration
     // if the converter is OpenGeminiLineProtocolConverter, we can use direct conversion
     // otherwise we need to convert Point to line protocol in invoke method
     private boolean useDirectConversion = false;
@@ -64,9 +65,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     private OpenGeminiLineProtocolConverter<T> lineProtocolConverter;
     private OpenGeminiPointConverter<T> pointConverter;
     private transient ListState<List<String>> checkpointedState;
-    // Lock for synchronizing batch access
-    @SuppressWarnings("synchronization")
-    private transient Object batchLock;
 
     // Runtime state
     private transient EnhancedOpenGeminiClient client;
@@ -170,7 +168,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                     "No converter configured. Either lineProtocolConverter or pointConverter must be set");
         }
         // Initialize runtime components
-        this.batchLock = new Object();
         totalBytesWritten = new AtomicLong(0);
         this.totalPointsWritten = new SimpleCounter();
         errorCount = new AtomicLong(0);
@@ -276,11 +273,10 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 return;
             }
 
-            synchronized (batchLock) {
-                currentBatch.add(lineProtocol);
-                if (shouldFlush()) {
-                    flush();
-                }
+            currentBatch.add(lineProtocol);
+
+            if (shouldFlush()) {
+                flush();
             }
         } catch (Exception e) {
             log.error("Error converting value: {}", value, e);
@@ -302,15 +298,19 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         if (currentBatch == null || currentBatch.isEmpty()) {
             return;
         }
+        // TODO: race condition
+        List<String> batchToWrite = new ArrayList<>(currentBatch);
+        currentBatch.clear();
 
         try {
-            writeBatchLineProtocols(currentBatch);
+            writeBatchLineProtocols(batchToWrite);
             lastFlushTime = System.currentTimeMillis();
-            currentBatch.clear();
         } catch (Exception e) {
             log.error("Error writing batch to OpenGemini: {}", e.getMessage(), e);
             errorCount.incrementAndGet();
             writeErrors.inc();
+            // Re-add points to current batch for retry/checkpointing
+            currentBatch.addAll(batchToWrite);
             // rethrow to signal failure
             throw e;
         }
@@ -450,20 +450,19 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     @Override
     public void snapshotState(FunctionSnapshotContext context) throws Exception {
         log.info("Starting checkpoint {} for OpenGeminiSink", context.getCheckpointId());
-        synchronized (batchLock) {
-            try {
-                // force flush current batch
-                flush();
-            } catch (Exception e) {
-                log.error(
-                        "Failed to flush during checkpoint, will save data that are not successfully flushed to state",
-                        e);
-            }
 
-            checkpointedState.clear();
-            if (!currentBatch.isEmpty()) {
-                checkpointedState.add(new ArrayList<>(currentBatch));
-            }
+        try {
+            // force flush current batch
+            flush();
+        } catch (Exception e) {
+            log.error(
+                    "Failed to flush during checkpoint, will save data that are not successfully flushed to state",
+                    e);
+        }
+
+        checkpointedState.clear();
+        if (!currentBatch.isEmpty()) {
+            checkpointedState.add(new ArrayList<>(currentBatch));
         }
 
         log.info(
