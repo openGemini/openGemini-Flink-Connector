@@ -348,7 +348,7 @@ public class OpenGeminiTableE2ETest {
                                 "  'field-fields' = 'metric1,metric2',"
                                 + // Specific fields
                                 "  'timestamp-field' = 'event_time',"
-                                + "  'write-precision' = 'ms',"
+                                + "  'source-precision' = 'ms',"
                                 + "  'ignore-null-values' = 'true'"
                                 + ")",
                         host, port, TEST_DATABASE);

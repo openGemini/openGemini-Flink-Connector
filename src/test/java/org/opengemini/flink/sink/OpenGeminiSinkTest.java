@@ -21,7 +21,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,31 +46,32 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
+import org.opengemini.flink.utils.EnhancedOpenGeminiClient;
+import org.opengemini.flink.utils.OpenGeminiClientFactory;
 
 import io.github.openfacade.http.HttpClientConfig;
-import io.opengemini.client.api.Point;
-import io.opengemini.client.impl.OpenGeminiClient;
-import io.opengemini.client.impl.OpenGeminiClientFactory;
 
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 class OpenGeminiSinkTest {
 
-    @Mock private OpenGeminiClient mockClient;
+    @Mock private EnhancedOpenGeminiClient mockClient;
 
-    @Mock private OpenGeminiPointConverter<TestData> mockConverter;
+    @Mock private OpenGeminiPointConverter<TestData> mockPointConverter;
+    @Mock private OpenGeminiLineProtocolConverter<TestData> mockLineProtocolConverter;
+    @Mock private ListState<List<String>> mockListState;
 
     @Mock private FunctionInitializationContext mockInitContext;
 
     @Mock private OperatorStateStore mockOperatorStateStore;
     @Mock private FunctionSnapshotContext mockSnapshotContext;
 
-    @Mock private ListState<List<Point>> mockListState;
     @Mock private RuntimeContext mockRuntimeContext;
     @Mock private OperatorMetricGroup mockMetricGroup;
     @Mock private Counter mockCounter;
-
+    // WARNING: if a new sink is to be created in an individual test, MUST use createTestSink helper
+    // method
     private OpenGeminiSink<TestData> sink;
     private OpenGeminiSinkConfiguration<TestData> configuration;
     public static final String TEST_DB_NAME = "test_db";
@@ -98,7 +101,7 @@ class OpenGeminiSinkTest {
                                 Duration.ofSeconds(
                                         OpenGeminiSinkConfiguration
                                                 .DEFAULT_REQUEST_TIMEOUT_SECONDS))
-                        .setConverter(mockConverter)
+                        .setConverter(mockLineProtocolConverter)
                         .build();
 
         sink = createTestSink(configuration);
@@ -125,17 +128,19 @@ class OpenGeminiSinkTest {
 
     @Test
     void testOpenInitializesClientAndResources() throws Exception {
-        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
-                mockStatic(OpenGeminiClientFactory.class)) {
+        try (MockedStatic<org.opengemini.flink.utils.OpenGeminiClientFactory> mockedFactory =
+                mockStatic(org.opengemini.flink.utils.OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
             // Act
             sink.open(new Configuration());
 
             // Verify
-            mockedFactory.verify(() -> OpenGeminiClientFactory.create(any()), times(1));
+            mockedFactory.verify(() -> OpenGeminiClientFactory.createEnhanced(any()), times(1));
             verify(mockClient).createDatabase(TEST_DB_NAME);
         }
     }
@@ -145,7 +150,9 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -155,7 +162,7 @@ class OpenGeminiSinkTest {
             assertDoesNotThrow(() -> sink.invoke(null, mock(SinkFunction.Context.class)));
 
             // Verify converter was not called
-            verify(mockConverter, never()).convert(any(), anyString());
+            verify(mockLineProtocolConverter, never()).convertToLineProtocol(any(), anyString());
         }
     }
 
@@ -165,11 +172,13 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
 
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
-            when(mockClient.write(anyString(), anyList()))
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
             // Create configuration with small batch size
@@ -183,7 +192,7 @@ class OpenGeminiSinkTest {
                             .setFlushInterval(
                                     10,
                                     TimeUnit.SECONDS) // Long interval to ensure batch size triggers
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
 
             sink = createTestSink(configuration);
@@ -195,11 +204,11 @@ class OpenGeminiSinkTest {
                     Arrays.asList(new TestData("sensor1", 25.5), new TestData("sensor2", 26.0));
 
             // Setup converter
-            when(mockConverter.convert(any(), anyString()))
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
                     .thenAnswer(
                             invocation -> {
                                 TestData data = invocation.getArgument(0);
-                                return createMockPoint(data.sensorId, data.value);
+                                return createMockLineProtocol(data.sensorId, data.value);
                             });
 
             // Act - invoke twice to trigger batch
@@ -208,7 +217,7 @@ class OpenGeminiSinkTest {
             }
 
             // Verify batch was written
-            verify(mockClient, atLeastOnce()).write(eq(TEST_DB_NAME), anyList());
+            verify(mockClient, atLeastOnce()).writeLineProtocols(eq(TEST_DB_NAME), anyList());
         }
     }
 
@@ -217,10 +226,12 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
-            when(mockClient.write(anyString(), anyList()))
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
             // Create configuration with short flush interval
@@ -232,7 +243,7 @@ class OpenGeminiSinkTest {
                             .setMeasurement(TEST_MEASUREMENT_NAME)
                             .setBatchSize(100) // Large batch size to ensure interval triggers first
                             .setFlushInterval(50, TimeUnit.MILLISECONDS)
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
 
             sink.initializeState(mockInitContext);
@@ -240,8 +251,9 @@ class OpenGeminiSinkTest {
 
             // Add one point
             TestData testData = new TestData("sensor1", 25.5);
-            Point mockPoint = createMockPoint("sensor1", 25.5);
-            when(mockConverter.convert(testData, TEST_MEASUREMENT_NAME)).thenReturn(mockPoint);
+            String mockLineProtocol = createMockLineProtocol("sensor1", 25.5);
+            when(mockLineProtocolConverter.convertToLineProtocol(testData, TEST_MEASUREMENT_NAME))
+                    .thenReturn(mockLineProtocol);
 
             sink.invoke(testData, mock(SinkFunction.Context.class));
 
@@ -252,7 +264,7 @@ class OpenGeminiSinkTest {
             sink.invoke(testData, mock(SinkFunction.Context.class));
 
             // Verify flush occurred
-            verify(mockClient, atLeastOnce()).write(eq(TEST_DB_NAME), anyList());
+            verify(mockClient, atLeastOnce()).writeLineProtocols(eq(TEST_DB_NAME), anyList());
         }
     }
 
@@ -261,7 +273,9 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
 
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
@@ -270,7 +284,7 @@ class OpenGeminiSinkTest {
             CompletableFuture<Void> failedFuture = new CompletableFuture<>();
             failedFuture.completeExceptionally(new RuntimeException("Connection error"));
 
-            when(mockClient.write(anyString(), anyList()))
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
                     .thenReturn(failedFuture)
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -284,7 +298,7 @@ class OpenGeminiSinkTest {
                             .setBatchSize(1)
                             .setFlushInterval(10, TimeUnit.SECONDS)
                             .setMaxRetries(2)
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
             // overwrite the sink in @BeforeEach to create a new sink with the new configuration
             sink = createTestSink(configuration);
@@ -293,14 +307,14 @@ class OpenGeminiSinkTest {
 
             // Add data
             TestData testData = new TestData("sensor1", 25.5);
-            when(mockConverter.convert(any(), anyString()))
-                    .thenReturn(createMockPoint("sensor1", 25.5));
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
+                    .thenReturn(createMockLineProtocol("sensor1", 25.5));
 
             sink.invoke(testData, mock(SinkFunction.Context.class));
 
             assertDoesNotThrow(() -> sink.invoke(testData, mock(SinkFunction.Context.class)));
 
-            verify(mockClient, times(3)).write(eq(TEST_DB_NAME), anyList());
+            verify(mockClient, times(3)).writeLineProtocols(eq(TEST_DB_NAME), anyList());
         }
     }
 
@@ -309,7 +323,9 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
 
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
 
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
@@ -317,18 +333,18 @@ class OpenGeminiSinkTest {
             sink.initializeState(mockInitContext);
             sink.open(new Configuration());
 
-            when(mockConverter.convert(any(), anyString()))
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
                     .thenAnswer(
                             invocation -> {
                                 TestData data = invocation.getArgument(0);
-                                return createMockPoint(data.sensorId, data.value);
+                                return createMockLineProtocol(data.sensorId, data.value);
                             });
 
             // mock a failure for the first write attempt
             CompletableFuture<Void> failedFuture = new CompletableFuture<>();
             failedFuture.completeExceptionally(
                     new RuntimeException("Testing Failure Handling: Persistent failure"));
-            when(mockClient.write(anyString(), anyList())).thenReturn(failedFuture);
+            when(mockClient.writeLineProtocols(anyString(), anyList())).thenReturn(failedFuture);
 
             // should throw an exception after max retries
             Exception exception =
@@ -343,7 +359,7 @@ class OpenGeminiSinkTest {
                             });
 
             verify(mockClient, times(configuration.getMaxRetries() + 1))
-                    .write(anyString(), anyList());
+                    .writeLineProtocols(anyString(), anyList());
         }
     }
 
@@ -351,20 +367,22 @@ class OpenGeminiSinkTest {
     void testWriteTimeout() throws Exception {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
-            when(mockConverter.convert(any(), anyString()))
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
                     .thenAnswer(
                             invocation -> {
                                 TestData data = invocation.getArgument(0);
-                                return createMockPoint(data.sensorId, data.value);
+                                return createMockLineProtocol(data.sensorId, data.value);
                             });
 
             // simulate timeout
             CompletableFuture<Void> timeoutFuture = new CompletableFuture<>();
-            when(mockClient.write(anyString(), anyList())).thenReturn(timeoutFuture);
+            when(mockClient.writeLineProtocols(anyString(), anyList())).thenReturn(timeoutFuture);
 
             // configure the sink with a very short request timeout
             OpenGeminiSinkConfiguration<TestData> configuration =
@@ -379,7 +397,7 @@ class OpenGeminiSinkTest {
                             .setConnectionTimeout(Duration.ofSeconds(5))
                             .setRequestTimeout(
                                     Duration.ofMillis(1)) // very short timeout to trigger timeout
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
 
             // create a new sink with the new configuration
@@ -400,14 +418,19 @@ class OpenGeminiSinkTest {
 
     @Test
     public void testCheckpointingAndRestoring() throws Exception {
-        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
-                mockStatic(OpenGeminiClientFactory.class)) {
+        try (MockedStatic<org.opengemini.flink.utils.OpenGeminiClientFactory> mockedFactory =
+                mockStatic(org.opengemini.flink.utils.OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(
+                            () ->
+                                    org.opengemini.flink.utils.OpenGeminiClientFactory
+                                            .createEnhanced(any()))
+                    .thenReturn(mockClient);
 
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
-            when(mockClient.write(anyString(), anyList()))
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
             // Setup state
@@ -423,8 +446,9 @@ class OpenGeminiSinkTest {
 
             // Add some data
             TestData testData = new TestData("sensor1", 25.5);
-            Point mockPoint = createMockPoint("sensor1", 25.5);
-            when(mockConverter.convert(testData, "test_measurement")).thenReturn(mockPoint);
+            String mockLineProtocol = createMockLineProtocol("sensor1", 25.5);
+            when(mockLineProtocolConverter.convertToLineProtocol(testData, "test_measurement"))
+                    .thenReturn(mockLineProtocol);
 
             sink.invoke(testData, mock(SinkFunction.Context.class));
 
@@ -436,9 +460,9 @@ class OpenGeminiSinkTest {
             verify(mockListState, atMost(1)).add(anyList());
 
             // Simulate restore
-            List<Point> restoredPoints = Collections.singletonList(mockPoint);
+            List<String> restoredLineProtocols = Collections.singletonList(mockLineProtocol);
             when(mockInitContext.isRestored()).thenReturn(true);
-            when(mockListState.get()).thenReturn(Collections.singletonList(restoredPoints));
+            when(mockListState.get()).thenReturn(Collections.singletonList(restoredLineProtocols));
 
             // Create new sink instance and restore
             OpenGeminiSink<TestData> restoredSink = createTestSink(configuration);
@@ -455,7 +479,9 @@ class OpenGeminiSinkTest {
     void testFlushFailureRetainsData() throws Exception {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -465,13 +491,13 @@ class OpenGeminiSinkTest {
             CompletableFuture<Void> failedFuture = new CompletableFuture<>();
             failedFuture.completeExceptionally(
                     new RuntimeException("Testing Failure Handling: Write failed"));
-            when(mockClient.write(anyString(), anyList())).thenReturn(failedFuture);
+            when(mockClient.writeLineProtocols(anyString(), anyList())).thenReturn(failedFuture);
 
-            when(mockConverter.convert(any(), anyString()))
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
                     .thenAnswer(
                             invocation -> {
                                 TestData data = invocation.getArgument(0);
-                                return createMockPoint(data.sensorId, data.value);
+                                return createMockLineProtocol(data.sensorId, data.value);
                             });
 
             // initialize state first
@@ -492,7 +518,7 @@ class OpenGeminiSinkTest {
                             .setMaxRetries(0)
                             .setConnectionTimeout(Duration.ofSeconds(5))
                             .setRequestTimeout(Duration.ofSeconds(1))
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
 
             sink = createTestSink(configuration);
@@ -516,7 +542,9 @@ class OpenGeminiSinkTest {
     void testEmptyBatchDoesNotWrite() throws Exception {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -524,7 +552,7 @@ class OpenGeminiSinkTest {
             // call close without any data
             sink.close();
 
-            verify(mockClient, never()).write(anyString(), anyList());
+            verify(mockClient, never()).writeLineProtocols(anyString(), anyList());
         }
     }
 
@@ -533,18 +561,20 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
-            when(mockClient.write(anyString(), anyList()))
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
                     .thenReturn(CompletableFuture.completedFuture(null));
             sink.initializeState(mockInitContext);
             sink.open(new Configuration());
 
             // Add some data
             TestData testData = new TestData("sensor1", 25.5);
-            when(mockConverter.convert(any(), anyString()))
-                    .thenReturn(createMockPoint("sensor1", 25.5));
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
+                    .thenReturn(createMockLineProtocol("sensor1", 25.5));
             sink.invoke(testData, mock(SinkFunction.Context.class));
 
             // Close
@@ -560,12 +590,15 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
             // Converter returns null
-            when(mockConverter.convert(any(), anyString())).thenReturn(null);
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
+                    .thenReturn(null);
 
             sink.open(new Configuration());
 
@@ -574,7 +607,7 @@ class OpenGeminiSinkTest {
             assertDoesNotThrow(() -> sink.invoke(testData, mock(SinkFunction.Context.class)));
 
             // Verify no write was attempted
-            verify(mockClient, never()).write(anyString(), anyList());
+            verify(mockClient, never()).writeLineProtocols(anyString(), anyList());
         }
     }
 
@@ -583,12 +616,14 @@ class OpenGeminiSinkTest {
         try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
                 mockStatic(OpenGeminiClientFactory.class)) {
             // Setup
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
             // Converter throws exception
-            when(mockConverter.convert(any(), anyString()))
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
                     .thenThrow(new RuntimeException("Conversion error"));
 
             sink.open(new Configuration());
@@ -619,7 +654,7 @@ class OpenGeminiSinkTest {
                             .setFlushInterval(
                                     OpenGeminiSinkConfiguration.DEFAULT_FLUSH_INTERVAL_MS,
                                     TimeUnit.MILLISECONDS)
-                            .setConverter(mockConverter)
+                            .setConverter(mockLineProtocolConverter)
                             .build();
 
             OpenGeminiSink<TestData> authSink = createTestSink(authConfig);
@@ -629,7 +664,7 @@ class OpenGeminiSinkTest {
                     ArgumentCaptor.forClass(io.opengemini.client.api.Configuration.class);
 
             mockedFactory
-                    .when(() -> OpenGeminiClientFactory.create(configCaptor.capture()))
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(configCaptor.capture()))
                     .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
@@ -662,7 +697,9 @@ class OpenGeminiSinkTest {
 
             OpenGeminiSink<TestData> noAuthSink = createTestSink(noAuthConfig);
 
-            mockedFactory.when(() -> OpenGeminiClientFactory.create(any())).thenReturn(mockClient);
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
             when(mockClient.createDatabase(anyString()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -673,6 +710,61 @@ class OpenGeminiSinkTest {
             Assertions.assertFalse(noAuthConfig.hasAuthentication());
             Assertions.assertNull(noAuthConfig.getUsername());
             Assertions.assertNull(noAuthConfig.getPassword());
+        }
+    }
+
+    @Test
+    void testLineProtocolConverterPath() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            configuration =
+                    configuration.toBuilder().setConverter(mockLineProtocolConverter).build();
+
+            sink = createTestSink(configuration);
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            TestData testData = new TestData("sensor1", 25.5);
+            String expectedLineProtocol = createMockLineProtocol("sensor1", 25.5);
+            when(mockLineProtocolConverter.convertToLineProtocol(testData, TEST_MEASUREMENT_NAME))
+                    .thenReturn(expectedLineProtocol);
+
+            sink.invoke(testData, mock(SinkFunction.Context.class));
+
+            verify(mockLineProtocolConverter)
+                    .convertToLineProtocol(testData, TEST_MEASUREMENT_NAME);
+            verify(mockPointConverter, never()).convertToPoint(any(), any());
+        }
+    }
+
+    @Test
+    void testNullLineProtocolHandling() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+
+            when(mockLineProtocolConverter.convertToLineProtocol(any(), anyString()))
+                    .thenReturn(null);
+
+            sink = createTestSink(configuration);
+            sink.open(new Configuration());
+
+            TestData testData = new TestData("sensor1", 25.5);
+            assertDoesNotThrow(() -> sink.invoke(testData, mock(SinkFunction.Context.class)));
+
+            verify(mockClient, never()).writeLineProtocols(any(), any());
         }
     }
 
@@ -688,7 +780,7 @@ class OpenGeminiSinkTest {
      */
     private OpenGeminiSink<TestData> createTestSink(OpenGeminiSinkConfiguration<TestData> config)
             throws Exception {
-        OpenGeminiSink<TestData> newSink = new OpenGeminiSink<>(config);
+        OpenGeminiSink<TestData> newSink = new OpenGeminiSink<>(config, mockLineProtocolConverter);
 
         // Set runtime context using reflection
         setupSinkWithMocks(newSink);
@@ -696,20 +788,10 @@ class OpenGeminiSinkTest {
         return newSink;
     }
 
-    private Point createMockPoint(String sensorId, double value) {
-        Point point = new Point();
-        point.setMeasurement(TEST_MEASUREMENT_NAME);
-        point.setTime(System.currentTimeMillis() * 1_000_000L);
-
-        Map<String, String> tags = new HashMap<>();
-        tags.put("sensor", sensorId);
-        point.setTags(tags);
-
-        Map<String, Object> fields = new HashMap<>();
-        fields.put("value", value);
-        point.setFields(fields);
-
-        return point;
+    private String createMockLineProtocol(String sensorId, double value) {
+        return String.format(
+                "%s,sensor=%s value=%f %d",
+                TEST_MEASUREMENT_NAME, sensorId, value, System.nanoTime());
     }
 
     // Test data class

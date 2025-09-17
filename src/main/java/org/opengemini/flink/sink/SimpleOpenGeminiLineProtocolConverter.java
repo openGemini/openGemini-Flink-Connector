@@ -18,108 +18,94 @@ package org.opengemini.flink.sink;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.StringJoiner;
 
 import org.apache.flink.util.function.SerializableFunction;
 
-import io.opengemini.client.api.Point;
-
 /**
- * A builder-style converter for creating OpenGemini Points. This version uses Flink's built-in
- * SerializableFunction.
+ * A builder-style converter for creating Line Protocol strings directly. This is the
+ * high-performance alternative to SimpleOpenGeminiPointConverter.
  *
  * @param <T> The type of object to convert
  */
-public class SimpleOpenGeminiPointConverter<T> implements OpenGeminiPointConverter<T> {
+public class SimpleOpenGeminiLineProtocolConverter<T>
+        implements OpenGeminiLineProtocolConverter<T> {
     private static final long serialVersionUID = 1L;
 
-    // TODO: compare double list indexing and hashmap
     private final Map<String, SerializableFunction<T, String>> tagExtractors;
-    private final Map<String, SerializableFunction<T, java.lang.Object>> fieldExtractors;
+    private final Map<String, SerializableFunction<T, Object>> fieldExtractors;
     private final SerializableFunction<T, Long> timestampExtractor;
 
-    private SimpleOpenGeminiPointConverter(
+    private SimpleOpenGeminiLineProtocolConverter(
             Map<String, SerializableFunction<T, String>> tagExtractors,
             Map<String, SerializableFunction<T, Object>> fieldExtractors,
             SerializableFunction<T, Long> timestampExtractor) {
-        // Create defensive copies to ensure immutability
         this.tagExtractors = new HashMap<>(tagExtractors);
         this.fieldExtractors = new HashMap<>(fieldExtractors);
         this.timestampExtractor = timestampExtractor;
     }
 
-    /**
-     * Converts the given value into an OpenGemini `Point` object with the specified measurement
-     * name. The method extracts tags, fields, and a timestamp from the value using the configured
-     * extractors.
-     *
-     * @param value The input value to convert. If null, the method returns null.
-     * @param measurement The name of the measurement to set in the `Point`.
-     * @return A `Point` object representing the converted value, or null if the value is null or no
-     *     fields are extracted.
-     * @throws RuntimeException If an error occurs while extracting tags, fields, or the timestamp.
-     */
     @Override
-    public Point convertToPoint(T value, String measurement) {
+    public String convertToLineProtocol(T value, String measurement) {
         if (value == null) {
             return null;
         }
 
-        Point point = new Point();
-        point.setMeasurement(measurement);
+        StringBuilder sb = new StringBuilder();
+        sb.append(measurement);
 
-        // Set tags
-        Map<String, String> tags = new HashMap<>();
+        // Tags
         for (Map.Entry<String, SerializableFunction<T, String>> entry : tagExtractors.entrySet()) {
-            try {
-                String tagValue = entry.getValue().apply(value);
-                if (tagValue != null) {
-                    tags.put(entry.getKey(), tagValue);
-                }
-            } catch (Exception e) {
-                throw new RuntimeException("Error extracting tag " + entry.getKey(), e);
+            String tagValue = entry.getValue().apply(value);
+            if (tagValue != null) {
+                sb.append(',').append(entry.getKey()).append('=').append(escape(tagValue));
             }
         }
-        if (!tags.isEmpty()) {
-            point.setTags(tags);
-        }
 
-        // Set fields
-        Map<String, java.lang.Object> fields = new HashMap<>();
-        for (Map.Entry<String, SerializableFunction<T, java.lang.Object>> entry :
+        // Fields
+        sb.append(' ');
+        StringJoiner fieldJoiner = new StringJoiner(",");
+        for (Map.Entry<String, SerializableFunction<T, Object>> entry :
                 fieldExtractors.entrySet()) {
-            try {
-                java.lang.Object fieldValue = entry.getValue().apply(value);
-                if (fieldValue != null) {
-                    fields.put(entry.getKey(), fieldValue);
-                }
-            } catch (Exception e) {
-                throw new RuntimeException("Error extracting field " + entry.getKey(), e);
+            Object fieldValue = entry.getValue().apply(value);
+            if (fieldValue != null) {
+                fieldJoiner.add(formatField(entry.getKey(), fieldValue));
             }
         }
-        if (fields.isEmpty()) {
-            // At least one field is required
-            return null;
-        }
-        point.setFields(fields);
 
-        // Set timestamp
+        if (fieldJoiner.length() == 0) {
+            return null; // At least one field required
+        }
+        sb.append(fieldJoiner.toString());
+
+        // Timestamp
         if (timestampExtractor != null) {
-            try {
-                Long timestamp = timestampExtractor.apply(value);
-                if (timestamp != null) {
-                    point.setTime(timestamp);
-                } else {
-                    point.setTime(
-                            System.currentTimeMillis() * 1_000_000L); // Current time in nanoseconds
-                }
-            } catch (Exception e) {
-                throw new RuntimeException("Error extracting timestamp", e);
-            }
+            Long timestamp = timestampExtractor.apply(value);
+            sb.append(' ').append(timestamp != null ? timestamp : System.nanoTime());
         } else {
-            point.setTime(System.currentTimeMillis() * 1_000_000L);
+            sb.append(' ').append(System.nanoTime());
         }
 
-        return point;
+        return sb.toString();
+    }
+
+    private String escape(String value) {
+        return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=");
+    }
+
+    private String formatField(String name, Object value) {
+        if (value instanceof String) {
+            return name + "=\"" + ((String) value).replace("\"", "\\\"") + "\"";
+        } else if (value instanceof Boolean) {
+            return name + "=" + value;
+        } else if (value instanceof Number) {
+            if (value instanceof Float || value instanceof Double) {
+                return name + "=" + value;
+            } else {
+                return name + "=" + value + "i";
+            }
+        }
+        return name + "=\"" + value.toString() + "\"";
     }
 
     public static <T> Builder<T> builder() {
@@ -132,23 +118,26 @@ public class SimpleOpenGeminiPointConverter<T> implements OpenGeminiPointConvert
                 new HashMap<>();
         private SerializableFunction<T, Long> timestampExtractor;
 
-        public Builder<T> addTag(String tagName, SerializableFunction<T, String> extractor) {
+        public SimpleOpenGeminiLineProtocolConverter.Builder<T> addTag(
+                String tagName, SerializableFunction<T, String> extractor) {
             tagExtractors.put(tagName, extractor);
             return this;
         }
 
-        public Builder<T> addField(
+        public SimpleOpenGeminiLineProtocolConverter.Builder<T> addField(
                 String fieldName, SerializableFunction<T, java.lang.Object> extractor) {
             fieldExtractors.put(fieldName, extractor);
             return this;
         }
 
-        public Builder<T> withTimestamp(SerializableFunction<T, Long> extractor) {
+        public SimpleOpenGeminiLineProtocolConverter.Builder<T> withTimestamp(
+                SerializableFunction<T, Long> extractor) {
             this.timestampExtractor = extractor;
             return this;
         }
 
-        public Builder<T> withTimestampMillis(SerializableFunction<T, Long> extractor) {
+        public SimpleOpenGeminiLineProtocolConverter.Builder<T> withTimestampMillis(
+                SerializableFunction<T, Long> extractor) {
             // Convert milliseconds to nanoseconds
             this.timestampExtractor =
                     value -> {
@@ -172,7 +161,8 @@ public class SimpleOpenGeminiPointConverter<T> implements OpenGeminiPointConvert
          * @throws RuntimeException If an error occurs while extracting the timestamp as an
          *     `Instant`.
          */
-        public Builder<T> withTimestampInstant(SerializableFunction<T, Instant> extractor) {
+        public SimpleOpenGeminiLineProtocolConverter.Builder<T> withTimestampInstant(
+                SerializableFunction<T, Instant> extractor) {
             // Convert Instant to nanoseconds
             this.timestampExtractor =
                     value -> {
@@ -186,11 +176,11 @@ public class SimpleOpenGeminiPointConverter<T> implements OpenGeminiPointConvert
             return this;
         }
 
-        public SimpleOpenGeminiPointConverter<T> build() {
+        public SimpleOpenGeminiLineProtocolConverter<T> build() {
             if (fieldExtractors.isEmpty()) {
                 throw new IllegalStateException("At least one field must be defined");
             }
-            return new SimpleOpenGeminiPointConverter<>(
+            return new SimpleOpenGeminiLineProtocolConverter<>(
                     tagExtractors, fieldExtractors, timestampExtractor);
         }
     }

@@ -48,6 +48,8 @@ class OpenGeminiDynamicTableSinkTest {
 
     private ResolvedSchema resolvedSchema;
 
+    public static final String DEFAULT_CONVERTER_TYPE = "line-protocol";
+
     @BeforeEach
     void setUp() {
         resolvedSchema = mock(ResolvedSchema.class);
@@ -72,7 +74,7 @@ class OpenGeminiDynamicTableSinkTest {
                         .timestampField("ts")
                         .addTagField("tag")
                         .ignoreNullValues(true)
-                        .writePrecision("ms")
+                        .sourceTimestampPrecision("ms")
                         .build();
 
         RowDataToPointConverter converter =
@@ -84,7 +86,7 @@ class OpenGeminiDynamicTableSinkTest {
                         StringData.fromString("id1"), 1000L, StringData.fromString("sensor"), 2.5d);
         row.setRowKind(RowKind.INSERT);
 
-        Point point = converter.convert(row, "measurement1");
+        Point point = converter.convertToPoint(row, "measurement1");
         assertNotNull(point);
         assertEquals("measurement1", point.getMeasurement());
 
@@ -122,7 +124,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(StringData.fromString("x"));
         row.setRowKind(RowKind.DELETE);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNull(p);
     }
 
@@ -139,7 +141,7 @@ class OpenGeminiDynamicTableSinkTest {
                         .timestampField("ts")
                         .addTagField("tagOnly")
                         .ignoreNullValues(true)
-                        .writePrecision("ms")
+                        .sourceTimestampPrecision("ms")
                         .build();
 
         RowDataToPointConverter converter = new RowDataToPointConverter(resolvedSchema, fm, "m");
@@ -148,7 +150,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(StringData.fromString("t"), 10L);
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
         Map<String, Object> fields = p.getFields();
         assertNotNull(fields);
@@ -165,20 +167,22 @@ class OpenGeminiDynamicTableSinkTest {
         when(resolvedSchema.getColumnDataTypes()).thenReturn(columnTypes);
 
         // microsecond
-        FieldMappingConfig fmUs = FieldMappingConfig.builder().writePrecision("us").build();
+        FieldMappingConfig fmUs =
+                FieldMappingConfig.builder().sourceTimestampPrecision("us").build();
         RowDataToPointConverter convUs = new RowDataToPointConverter(resolvedSchema, fmUs, "m");
         GenericRowData rowUs = GenericRowData.of(StringData.fromString("a"));
         rowUs.setRowKind(RowKind.INSERT);
-        Point pUs = convUs.convert(rowUs, "m");
+        Point pUs = convUs.convertToPoint(rowUs, "m");
         assertNotNull(pUs);
         assertEquals(Precision.PRECISIONMICROSECOND, pUs.getPrecision());
 
         // nanosecond
-        FieldMappingConfig fmNs = FieldMappingConfig.builder().writePrecision("ns").build();
+        FieldMappingConfig fmNs =
+                FieldMappingConfig.builder().sourceTimestampPrecision("ns").build();
         RowDataToPointConverter convNs = new RowDataToPointConverter(resolvedSchema, fmNs, "m");
         GenericRowData rowNs = GenericRowData.of(StringData.fromString("b"));
         rowNs.setRowKind(RowKind.INSERT);
-        Point pNs = convNs.convert(rowNs, "m");
+        Point pNs = convNs.convertToPoint(rowNs, "m");
         assertNotNull(pNs);
         assertEquals(Precision.PRECISIONNANOSECOND, pNs.getPrecision());
     }
@@ -190,7 +194,8 @@ class OpenGeminiDynamicTableSinkTest {
         FieldMappingConfig fieldMapping = FieldMappingConfig.builder().build();
 
         OpenGeminiDynamicTableSink sink =
-                new OpenGeminiDynamicTableSink(config, schema, fieldMapping, null);
+                new OpenGeminiDynamicTableSink(
+                        config, schema, fieldMapping, null, DEFAULT_CONVERTER_TYPE);
 
         ChangelogMode mode = sink.getChangelogMode(ChangelogMode.all());
 
@@ -208,7 +213,8 @@ class OpenGeminiDynamicTableSinkTest {
         Integer parallelism = 4;
 
         OpenGeminiDynamicTableSink sink =
-                new OpenGeminiDynamicTableSink(config, schema, fieldMapping, parallelism);
+                new OpenGeminiDynamicTableSink(
+                        config, schema, fieldMapping, parallelism, DEFAULT_CONVERTER_TYPE);
 
         DynamicTableSink copiedSink = sink.copy();
 
@@ -229,7 +235,8 @@ class OpenGeminiDynamicTableSinkTest {
         FieldMappingConfig fieldMapping = FieldMappingConfig.builder().build();
 
         OpenGeminiDynamicTableSink sink =
-                new OpenGeminiDynamicTableSink(config, schema, fieldMapping, null);
+                new OpenGeminiDynamicTableSink(
+                        config, schema, fieldMapping, null, DEFAULT_CONVERTER_TYPE);
 
         String summary = sink.asSummaryString();
 
@@ -261,7 +268,8 @@ class OpenGeminiDynamicTableSinkTest {
         FieldMappingConfig fieldMapping = FieldMappingConfig.builder().build();
 
         OpenGeminiDynamicTableSink sink =
-                new OpenGeminiDynamicTableSink(config, schema, fieldMapping, 2);
+                new OpenGeminiDynamicTableSink(
+                        config, schema, fieldMapping, 2, DEFAULT_CONVERTER_TYPE);
 
         DynamicTableSink.Context context = mock(DynamicTableSink.Context.class);
         DynamicTableSink.SinkRuntimeProvider provider = sink.getSinkRuntimeProvider(context);
@@ -283,7 +291,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(StringData.fromString("x"));
         row.setRowKind(RowKind.UPDATE_BEFORE);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNull(p);
     }
 
@@ -302,7 +310,7 @@ class OpenGeminiDynamicTableSinkTest {
         row.setRowKind(RowKind.INSERT);
 
         long beforeConvert = System.currentTimeMillis();
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         long afterConvert = System.currentTimeMillis();
 
         assertNotNull(p);
@@ -333,7 +341,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(StringData.fromString("tag_value"), 10, 20.0, 30.0f);
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
 
         Map<String, Object> fields = p.getFields();
@@ -365,7 +373,7 @@ class OpenGeminiDynamicTableSinkTest {
         row.setField(2, null); // null field
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
 
         Map<String, Object> fields = p.getFields();
@@ -389,14 +397,14 @@ class OpenGeminiDynamicTableSinkTest {
 
         for (int i = 0; i < precisions.length; i++) {
             FieldMappingConfig fm =
-                    FieldMappingConfig.builder().writePrecision(precisions[i]).build();
+                    FieldMappingConfig.builder().sourceTimestampPrecision(precisions[i]).build();
             RowDataToPointConverter converter =
                     new RowDataToPointConverter(resolvedSchema, fm, "m");
 
             GenericRowData row = GenericRowData.of(StringData.fromString("test"));
             row.setRowKind(RowKind.INSERT);
 
-            Point p = converter.convert(row, "m");
+            Point p = converter.convertToPoint(row, "m");
             assertNotNull(p);
             assertEquals(expectedPrecisions[i], p.getPrecision());
         }
@@ -410,7 +418,10 @@ class OpenGeminiDynamicTableSinkTest {
         when(resolvedSchema.getColumnDataTypes()).thenReturn(columnTypes);
 
         FieldMappingConfig fm =
-                FieldMappingConfig.builder().timestampField("ts").writePrecision("ms").build();
+                FieldMappingConfig.builder()
+                        .timestampField("ts")
+                        .sourceTimestampPrecision("ms")
+                        .build();
 
         RowDataToPointConverter converter = new RowDataToPointConverter(resolvedSchema, fm, "m");
 
@@ -420,7 +431,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(timestamp, StringData.fromString("test"));
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
         // extractTimestamp returns milliseconds, not nanos
         assertEquals(1609459200000L, p.getTime()); // Time is in milliseconds
@@ -470,7 +481,7 @@ class OpenGeminiDynamicTableSinkTest {
                         );
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
 
         Map<String, Object> fields = p.getFields();
@@ -505,7 +516,7 @@ class OpenGeminiDynamicTableSinkTest {
         row.setField(2, 42);
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
 
         Map<String, String> tags = p.getTags();
@@ -540,7 +551,7 @@ class OpenGeminiDynamicTableSinkTest {
         GenericRowData row = GenericRowData.of(123, true, 3.14, StringData.fromString("test"));
         row.setRowKind(RowKind.INSERT);
 
-        Point p = converter.convert(row, "m");
+        Point p = converter.convertToPoint(row, "m");
         assertNotNull(p);
 
         Map<String, String> tags = p.getTags();
