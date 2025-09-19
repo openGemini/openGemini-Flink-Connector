@@ -83,7 +83,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     // Flink Metrics
     private transient Histogram writeLatency;
     private transient Counter writeErrors;
-    private transient Meter pointsPerSecond;
 
     // Dynamic batch size adjustment
     private transient int currentBatchSize;
@@ -98,7 +97,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     public static final String CURRENT_BATCH_SIZE_METRIC = "currentBatchSize";
     public static final String WRITE_ERRORS_METRIC = "writeErrors";
     public static final String LAST_SUCCESSFUL_WRITE_TIME_METRIC = "lastSuccessfulWriteTime";
-    public static final String POINTS_PER_SECOND_METRIC = "pointsPerSecond";
     public static final String TOTAL_BYTES_WRITTEN_METRIC = "totalBytesWritten";
     // metric for dynamic batch size
     public static final String DYNAMIC_BATCH_SIZE_METRIC = "dynamicBatchSize";
@@ -229,12 +227,10 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                         .addGroup(METRIC_FIRST_NAME)
                         .addGroup(METRIC_SECOND_NAME);
 
-        // 1. Write latency histogram
         this.writeLatency =
                 metricGroup.histogram(
                         WRITE_LATENCY_METRIC, new DescriptiveStatisticsHistogram(1000));
 
-        // 2. Current batch size gauge
         metricGroup.gauge(
                 CURRENT_BATCH_SIZE_METRIC,
                 new Gauge<Integer>() {
@@ -244,10 +240,8 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                     }
                 });
 
-        // 3. Write errors counter
         this.writeErrors = metricGroup.counter(WRITE_ERRORS_METRIC);
 
-        // 4. Last successful write time gauge
         metricGroup.gauge(
                 LAST_SUCCESSFUL_WRITE_TIME_METRIC,
                 new Gauge<Long>() {
@@ -257,11 +251,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                     }
                 });
 
-        // 5. Points per second meter
-        this.pointsPerSecond =
-                metricGroup.meter(POINTS_PER_SECOND_METRIC, new MeterView(totalPointsWritten, 60));
-
-        // 6. Total bytes written gauge
         metricGroup.gauge(
                 TOTAL_BYTES_WRITTEN_METRIC,
                 new Gauge<Long>() {
