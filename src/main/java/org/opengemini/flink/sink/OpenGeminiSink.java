@@ -85,6 +85,13 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     private transient Counter writeErrors;
     private transient Meter pointsPerSecond;
 
+    // Dynamic batch size adjustment
+    private transient int currentBatchSize;
+    private transient int initialBatchSize;
+    private transient int evaluationCounter;
+    private transient long totalLatency;
+    private transient int errorInWindow;
+
     public static final String METRIC_FIRST_NAME = "opengemini";
     public static final String METRIC_SECOND_NAME = "sink";
     public static final String WRITE_LATENCY_METRIC = "writeLatency";
@@ -93,6 +100,13 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     public static final String LAST_SUCCESSFUL_WRITE_TIME_METRIC = "lastSuccessfulWriteTime";
     public static final String POINTS_PER_SECOND_METRIC = "pointsPerSecond";
     public static final String TOTAL_BYTES_WRITTEN_METRIC = "totalBytesWritten";
+    // metric for dynamic batch size
+    public static final String DYNAMIC_BATCH_SIZE_METRIC = "dynamicBatchSize";
+    public static final int DYNAMIC_BATCH_SIZE_EVALUATION_INTERVAL = 10; // evaluate every 10 writes
+    public static final int DYNAMIC_BATCH_SIZE_INCREASE_THRESHOLD = 300; // ms
+    public static final int DYNAMIC_BATCH_SIZE_DECREASE_THRESHOLD = 500; // ms
+    public static final double DYNAMIC_BATCH_INCREASE_FACTOR = 1.2; // multiplicative increase
+    public static final double DYNAMIC_BATCH_DECREASE_FACTOR = 0.7; // division decrease
 
     // TODO: decouple converter from configuration, the following method will be removed in the
     // future
@@ -177,6 +191,13 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         batchesWritten = new AtomicLong(0);
         lastSuccessfulWriteTime = new AtomicLong(System.currentTimeMillis());
 
+        // Initialize dynamic batch size tracking
+        this.initialBatchSize = configuration.getBatchSize();
+        this.currentBatchSize = configuration.getBatchSize();
+        this.evaluationCounter = 0;
+        this.totalLatency = 0;
+        this.errorInWindow = 0;
+
         registerMetrics();
 
         // Ensure database exists
@@ -251,6 +272,15 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                         return totalBytesWritten.get();
                     }
                 });
+
+        metricGroup.gauge(
+                DYNAMIC_BATCH_SIZE_METRIC,
+                new Gauge<Integer>() {
+                    @Override
+                    public Integer getValue() {
+                        return currentBatchSize;
+                    }
+                });
     }
 
     @Override
@@ -289,7 +319,9 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     }
 
     private boolean shouldFlush() {
-        boolean batchFull = currentBatch.size() >= configuration.getBatchSize();
+        boolean batchFull =
+                currentBatch.size()
+                        >= currentBatchSize; // use dynamic batch size, not configured batch size
         boolean timeoutReached =
                 configuration.getFlushIntervalMillis() > 0
                         && (System.currentTimeMillis() - lastFlushTime)
@@ -304,14 +336,25 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         }
 
         try {
+            long startTime = System.currentTimeMillis();
             writeBatchLineProtocols(currentBatch);
+            long writeTime = System.currentTimeMillis() - startTime;
+
+            // Track latency for evaluation
+            totalLatency += writeTime;
+            evaluateBatchSize();
+
             lastFlushTime = System.currentTimeMillis();
             currentBatch.clear();
         } catch (Exception e) {
             log.error("Error writing batch to OpenGemini: {}", e.getMessage(), e);
             errorCount.incrementAndGet();
             writeErrors.inc();
-            // rethrow to signal failure
+
+            // Track error for evaluation
+            errorInWindow++;
+            evaluateBatchSize();
+
             throw e;
         }
     }
@@ -504,5 +547,60 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
             }
             log.info("Restored {} lines from checkpoint", restoredCount);
         }
+    }
+
+    /** Evaluate and adjust batch size based on recent performance */
+    private void evaluateBatchSize() {
+        evaluationCounter++;
+        if (evaluationCounter >= DYNAMIC_BATCH_SIZE_EVALUATION_INTERVAL) {
+            double avgLatency = totalLatency / ((double) (DYNAMIC_BATCH_SIZE_EVALUATION_INTERVAL));
+
+            log.debug(
+                    "Evaluating batch size: avgLatency={}ms, errors={}, currentBatchSize={}",
+                    avgLatency,
+                    errorInWindow,
+                    currentBatchSize);
+
+            if (avgLatency < DYNAMIC_BATCH_SIZE_INCREASE_THRESHOLD && errorInWindow == 0) {
+                increaseBatchSize();
+            } else if (avgLatency > DYNAMIC_BATCH_SIZE_DECREASE_THRESHOLD || errorInWindow > 0) {
+                decreaseBatchSize();
+            }
+
+            resetEvaluationWindow();
+        }
+    }
+
+    /** Increase batch size using multiplicative growth */
+    private void increaseBatchSize() {
+        int newSize = (int) (currentBatchSize * DYNAMIC_BATCH_INCREASE_FACTOR);
+        int maxSize = initialBatchSize * 4;
+        int oldSize = currentBatchSize;
+
+        currentBatchSize = Math.min(newSize, maxSize);
+
+        if (currentBatchSize != oldSize) {
+            log.info("Increased batch size from {} to {}", oldSize, currentBatchSize);
+        }
+    }
+
+    /** Decrease batch size using division */
+    private void decreaseBatchSize() {
+        int newSize = (int) (currentBatchSize * DYNAMIC_BATCH_DECREASE_FACTOR);
+        int oldSize = currentBatchSize;
+
+        // minimal batch size should not be less than initialBatchSize
+        currentBatchSize = Math.max(newSize, initialBatchSize);
+
+        if (currentBatchSize != oldSize) {
+            log.info("Decreased batch size from {} to {}", oldSize, currentBatchSize);
+        }
+    }
+
+    /** Reset evaluation window */
+    private void resetEvaluationWindow() {
+        evaluationCounter = 0;
+        totalLatency = 0;
+        errorInWindow = 0;
     }
 }
