@@ -380,11 +380,11 @@ The connector exposes the following Flink metrics under `opengemini.sink`:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `writeLatency` | Histogram | Batch write latency in milliseconds |
-| `currentBatchSize` | Gauge | Current number of points in buffer |
-| `writeErrors` | Counter | Total number of write failures |
-| `lastSuccessfulWriteTime` | Gauge | Timestamp of last successful write |
-| `pointsPerSecond` | Meter | Write throughput (60-second window) |
-| `totalBytesWritten` | Gauge | Total bytes written to OpenGemini |
+| `currentBatchSize` | Gauge | Current number of points in buffer  |
+| `writeErrors` | Counter | Total number of write failures      |
+| `lastSuccessfulWriteTime` | Gauge | Timestamp of last successful write  |
+| `pointsPerSecond` | Meter | Write throughput (not real time)    |
+| `totalBytesWritten` | Gauge | Total bytes written to OpenGemini   |
  | `dynamicBatchSize` | Gauge | Current dynamic batch size being used|
 
 Access metrics via:
