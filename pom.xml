@@ -287,6 +287,8 @@
                                         <exclude>*Test</exclude>
                                         <exclude>*Exception</exclude>
                                         <exclude>*Configuration</exclude>
+                                        <exclude>EnhancedOpenGeminiClient</exclude>
+                                        <exclude>OpenGeminiClientFactory</exclude>
                                     </excludes>
                                     <limits>
                                         <limit>

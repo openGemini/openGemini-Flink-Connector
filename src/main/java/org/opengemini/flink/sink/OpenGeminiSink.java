@@ -432,7 +432,6 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 throw new RuntimeException("Failed to close OpenGemini client", e);
             }
         }
-
         log.info(
                 "OpenGeminiSink closed. Final stats: totalPoints={}, batches={}, errors={}",
                 totalPointsWritten.getCount(),
