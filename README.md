@@ -32,6 +32,8 @@ To be supported
 
 ### Basic Usage
 
+You may find detailed examples in the `example/` directory.
+
 #### Programmatic Configuration
 
 ```java
@@ -337,6 +339,8 @@ The connector supports the following row kinds:
 
 ## Architecture
 
+You may find detailed design documentation in the `docs/` directory.
+
 ### Data Flow
 
 Optimized Path (Line Protocol Converter):
@@ -392,7 +396,7 @@ Access metrics via:
 
 ```bash
 git clone https://github.com/apache/flink-connector-opengemini.git
-cd flink-connector-opengemini
+cd openGemini-Flink-Connector
 mvn clean install
 ```
 
@@ -406,6 +410,7 @@ mvn test
 
 - Currently supports at-least-once delivery semantics only
 - No support for schema evolution
+- Significant performance bottleneck brought by Line Protocol conversion
 
 ## Roadmap
 
