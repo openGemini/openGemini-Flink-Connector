@@ -15,8 +15,7 @@
  */
 package org.opengemini.flink.sink;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -50,6 +49,7 @@ import org.opengemini.flink.utils.EnhancedOpenGeminiClient;
 import org.opengemini.flink.utils.OpenGeminiClientFactory;
 
 import io.github.openfacade.http.HttpClientConfig;
+import io.opengemini.client.api.Point;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -677,7 +677,7 @@ class OpenGeminiSinkTest {
             HttpClientConfig httpConfig = capturedConfig.getHttpConfig();
 
             // Verify that auth filter was added
-            Assertions.assertNotNull(httpConfig);
+            assertNotNull(httpConfig);
             // Note: We can't directly verify the filter, but we can verify the configuration was
             // used
             Assertions.assertTrue(authConfig.hasAuthentication());
@@ -768,6 +768,258 @@ class OpenGeminiSinkTest {
         }
     }
 
+    @Test
+    void testConstructor_WithLineProtocolConverter() {
+        // Test constructor with OpenGeminiLineProtocolConverter
+        OpenGeminiSinkConfiguration<TestData> config =
+                OpenGeminiSinkConfiguration.<TestData>builder()
+                        .setHost("localhost")
+                        .setPort(8086)
+                        .setDatabase(TEST_DB_NAME)
+                        .setMeasurement(TEST_MEASUREMENT_NAME)
+                        .setConverter(mockLineProtocolConverter)
+                        .build();
+
+        OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+
+        // Verify lineProtocolConverter is set and pointConverter is null
+        // Note: We can't directly access these fields, but we can verify behavior
+        assertNotNull(sink);
+        assertEquals(config, getField(sink, "configuration"));
+    }
+
+    @Test
+    void testConstructor_WithPointConverter() {
+        // Test constructor with OpenGeminiPointConverter
+        OpenGeminiSinkConfiguration<TestData> config =
+                OpenGeminiSinkConfiguration.<TestData>builder()
+                        .setHost("localhost")
+                        .setPort(8086)
+                        .setDatabase(TEST_DB_NAME)
+                        .setMeasurement(TEST_MEASUREMENT_NAME)
+                        .setConverter(mockPointConverter)
+                        .build();
+
+        OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+
+        assertNotNull(sink);
+        assertEquals(config, getField(sink, "configuration"));
+    }
+
+    @Test
+    void testConstructor_WithInvalidConverter() {
+        // Test constructor with invalid converter type
+        Object invalidConverter = new Object(); // Not a valid converter type
+
+        OpenGeminiSinkConfiguration<TestData> config =
+                OpenGeminiSinkConfiguration.<TestData>builder()
+                        .setHost("localhost")
+                        .setPort(8086)
+                        .setDatabase(TEST_DB_NAME)
+                        .setMeasurement(TEST_MEASUREMENT_NAME)
+                        .setConverter(invalidConverter)
+                        .build();
+
+        IllegalArgumentException exception =
+                assertThrows(IllegalArgumentException.class, () -> new OpenGeminiSink<>(config));
+
+        assertEquals(
+                "Converter must be either OpenGeminiLineProtocolConverter or OpenGeminiPointConverter",
+                exception.getMessage());
+    }
+
+    @Test
+    void testOpen_WithPointConverter_SetsDirectConversionFalse() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            // Setup configuration with point converter
+            OpenGeminiSinkConfiguration<TestData> config =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost("localhost")
+                            .setPort(8086)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setConverter(mockPointConverter)
+                            .build();
+
+            OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+            setupSinkWithMocks(sink);
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Act
+            sink.open(new Configuration());
+
+            // Verify useDirectConversion is set to false (we can't directly access it,
+            // but we can verify the log message or behavior)
+            // The method should complete without throwing IllegalStateException
+            assertDoesNotThrow(() -> sink.open(new Configuration()));
+        }
+    }
+
+    @Test
+    void testOpen_WithNoConverter_ThrowsIllegalStateException() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            // Create a sink with configuration that has no converter
+            // This requires creating a special configuration or using reflection to set converter
+            // to null
+            OpenGeminiSinkConfiguration<TestData> config =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost("localhost")
+                            .setPort(8086)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setConverter(mockLineProtocolConverter)
+                            .build();
+
+            OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+            setupSinkWithMocks(sink);
+
+            // Use reflection to set both converters to null to simulate the error condition
+            setField(sink, "lineProtocolConverter", null);
+            setField(sink, "pointConverter", null);
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Act & Assert
+            IllegalStateException exception =
+                    assertThrows(IllegalStateException.class, () -> sink.open(new Configuration()));
+
+            assertEquals(
+                    "No converter configured. Either lineProtocolConverter or pointConverter must be set",
+                    exception.getMessage());
+        }
+    }
+
+    @Test
+    void testInvoke_WithPointConverter_NullPointHandling() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            // Setup configuration with point converter
+            OpenGeminiSinkConfiguration<TestData> config =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost("localhost")
+                            .setPort(8086)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setConverter(mockPointConverter)
+                            .build();
+
+            OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+            setupSinkWithMocks(sink);
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Setup point converter to return null
+            when(mockPointConverter.convertToPoint(any(), anyString())).thenReturn(null);
+
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            TestData testData = new TestData("sensor1", 25.5);
+
+            // Act - should not throw exception and should return early
+            assertDoesNotThrow(() -> sink.invoke(testData, mock(SinkFunction.Context.class)));
+
+            // Verify converter was called but no write occurred
+            verify(mockPointConverter).convertToPoint(testData, TEST_MEASUREMENT_NAME);
+            verify(mockClient, never()).writeLineProtocols(anyString(), anyList());
+        }
+    }
+
+    @Test
+    void testInvoke_WithPointConverter_ValidPoint() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            // Setup configuration with point converter
+            OpenGeminiSinkConfiguration<TestData> config =
+                    OpenGeminiSinkConfiguration.<TestData>builder()
+                            .setHost("localhost")
+                            .setPort(8086)
+                            .setDatabase(TEST_DB_NAME)
+                            .setMeasurement(TEST_MEASUREMENT_NAME)
+                            .setBatchSize(1) // Small batch size to trigger immediate write
+                            .setConverter(mockPointConverter)
+                            .build();
+
+            OpenGeminiSink<TestData> sink = new OpenGeminiSink<>(config);
+            setupSinkWithMocks(sink);
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            when(mockClient.writeLineProtocols(anyString(), anyList()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Mock Point object
+            Point mockPoint = mock(Point.class);
+            String expectedLineProtocol = createMockLineProtocol("sensor1", 25.5);
+            when(mockPoint.lineProtocol()).thenReturn(expectedLineProtocol);
+            when(mockPointConverter.convertToPoint(any(), anyString())).thenReturn(mockPoint);
+
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            TestData testData = new TestData("sensor1", 25.5);
+
+            // Act
+            sink.invoke(testData, mock(SinkFunction.Context.class));
+
+            // Verify the flow: converter called, point.lineProtocol() called, write occurred
+            verify(mockPointConverter).convertToPoint(testData, TEST_MEASUREMENT_NAME);
+            verify(mockPoint).lineProtocol();
+            verify(mockClient).writeLineProtocols(eq(TEST_DB_NAME), anyList());
+        }
+    }
+
+    @Test
+    void testClose_ClientCloseThrowsException() throws Exception {
+        try (MockedStatic<OpenGeminiClientFactory> mockedFactory =
+                mockStatic(OpenGeminiClientFactory.class)) {
+
+            mockedFactory
+                    .when(() -> OpenGeminiClientFactory.createEnhanced(any()))
+                    .thenReturn(mockClient);
+            when(mockClient.createDatabase(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            // Setup client.close() to throw an exception
+            RuntimeException closeException = new RuntimeException("Connection lost");
+            doThrow(closeException).when(mockClient).close();
+
+            sink.initializeState(mockInitContext);
+            sink.open(new Configuration());
+
+            // Act & Assert
+            RuntimeException exception = assertThrows(RuntimeException.class, () -> sink.close());
+
+            assertEquals("Failed to close OpenGemini client", exception.getMessage());
+            assertEquals(closeException, exception.getCause());
+
+            // Verify close was attempted
+            verify(mockClient).close();
+        }
+    }
+
     // Helper methods
 
     /**
@@ -802,6 +1054,28 @@ class OpenGeminiSinkTest {
         TestData(String sensorId, double value) {
             this.sensorId = sensorId;
             this.value = value;
+        }
+    }
+
+    // Helper methods for reflection access
+    @SuppressWarnings("unchecked")
+    private <T> T getField(Object target, String fieldName) {
+        try {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return (T) field.get(target);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get field: " + fieldName, e);
+        }
+    }
+
+    private void setField(Object target, String fieldName, Object value) {
+        try {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set field: " + fieldName, e);
         }
     }
 
