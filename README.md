@@ -16,6 +16,7 @@ A high-performance Apache Flink sink connector for [OpenGemini](https://github.c
 - **Async Writing**: Non-blocking writes with configurable parallelism
 - **Error Handling**: Automatic retry for transient failures with exponential backoff
 - **Monitoring and Metrics**: Exposes metrics for monitoring write performance and errors
+- **Dynamic Batch Sizing**: Automatic batch size adjustment based on real-time performance metrics for optimal throughput
 
 ## Requirements
 
@@ -380,6 +381,7 @@ The connector exposes the following Flink metrics under `opengemini.sink`:
 | `lastSuccessfulWriteTime` | Gauge | Timestamp of last successful write |
 | `pointsPerSecond` | Meter | Write throughput (60-second window) |
 | `totalBytesWritten` | Gauge | Total bytes written to OpenGemini |
+ | `dynamicBatchSize` | Gauge | Current dynamic batch size being used|
 
 Access metrics via:
 - Flink Web UI: Navigate to Task Metrics
