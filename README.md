@@ -1,4 +1,4 @@
-# Flink OpenGemini Connector (DRAFT)
+# Flink OpenGemini Connector
 
 _This connector is still being developed. Functions described may not be fully implemented yet, or
 subject to change. Please check the latest documentation and source code for updates._
