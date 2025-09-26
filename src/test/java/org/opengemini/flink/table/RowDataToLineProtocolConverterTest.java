@@ -149,7 +149,7 @@ public class RowDataToLineProtocolConverterTest {
         }
 
         @Test
-        @DisplayName("Should add _empty=true when no fields have values")
+        @DisplayName("Should return null value when no fields have values")
         void testEmptyFields() {
             List<String> columnNames = Arrays.asList("tag1", "field1");
             List<DataType> columnTypes = Arrays.asList(DataTypes.STRING(), DataTypes.STRING());
@@ -173,7 +173,7 @@ public class RowDataToLineProtocolConverterTest {
 
             String lineProtocol = converter.convertToLineProtocol(row, "test");
 
-            assertTrue(lineProtocol.contains("_empty=true"));
+            assertNull(lineProtocol);
         }
     }
 

@@ -15,6 +15,9 @@
  */
 package org.opengemini.flink.table;
 
+import static org.opengemini.flink.sink.SimpleOpenGeminiLineProtocolConverter.escape;
+import static org.opengemini.flink.sink.SimpleOpenGeminiLineProtocolConverter.formatField;
+
 import java.io.Serializable;
 import java.util.*;
 
@@ -219,7 +222,7 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
             }
 
             if (fieldJoiner.length() == 0) {
-                fieldJoiner.add("_empty=true");
+                return null; // At least one field required
             }
             sb.append(fieldJoiner.toString());
 
@@ -227,26 +230,6 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
             sb.append(' ').append(extractTimestamp(rowData));
 
             return sb.toString();
-        }
-
-        private String escape(String value) {
-            // Line protocol escaping for spaces, commas, and equal signs
-            return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=");
-        }
-
-        private String formatField(String name, Object value) {
-            if (value instanceof String) {
-                return name + "=\"" + ((String) value).replace("\"", "\\\"") + "\"";
-            } else if (value instanceof Boolean) {
-                return name + "=" + value;
-            } else if (value instanceof Number) {
-                if (value instanceof Float || value instanceof Double) {
-                    return name + "=" + value;
-                } else {
-                    return name + "=" + value + "i"; // integer will need an 'i' suffix
-                }
-            }
-            return name + "=\"" + value.toString() + "\"";
         }
     }
 }

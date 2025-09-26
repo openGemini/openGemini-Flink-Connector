@@ -89,11 +89,11 @@ public class SimpleOpenGeminiLineProtocolConverter<T>
         return sb.toString();
     }
 
-    private String escape(String value) {
+    public static String escape(String value) {
         return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=");
     }
 
-    private String formatField(String name, Object value) {
+    public static String formatField(String name, Object value) {
         if (value instanceof String) {
             return name + "=\"" + ((String) value).replace("\"", "\\\"") + "\"";
         } else if (value instanceof Boolean) {
