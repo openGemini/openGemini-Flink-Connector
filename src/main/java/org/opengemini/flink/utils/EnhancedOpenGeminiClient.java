@@ -37,7 +37,6 @@ public class EnhancedOpenGeminiClient extends OpenGeminiClient {
      * @param database the name of the database
      * @param lineProtocol the line protocol string to write
      * @return a CompletableFuture that completes when the write is done
-     * @throws OpenGeminiException if the write fails
      */
     public CompletableFuture<Void> writeLineProtocol(String database, String lineProtocol) {
         return writeLineProtocol(database, null, lineProtocol);
@@ -50,7 +49,6 @@ public class EnhancedOpenGeminiClient extends OpenGeminiClient {
      * @param retentionPolicy the name of the retention policy (optional)
      * @param lineProtocol the line protocol string to write
      * @return a CompletableFuture that completes when the write is done
-     * @throws OpenGeminiException if the write fails
      */
     public CompletableFuture<Void> writeLineProtocol(
             String database, String retentionPolicy, String lineProtocol) {
@@ -87,7 +85,6 @@ public class EnhancedOpenGeminiClient extends OpenGeminiClient {
      * @param retentionPolicy the name of the retention policy (optional)
      * @param lineProtocols list of line protocol strings to write
      * @return a CompletableFuture that completes when the write is done
-     * @throws OpenGeminiException if the write fails
      */
     public CompletableFuture<Void> writeLineProtocols(
             String database, String retentionPolicy, List<String> lineProtocols) {
@@ -126,7 +123,6 @@ public class EnhancedOpenGeminiClient extends OpenGeminiClient {
      * @param retentionPolicy the name of the retention policy (optional)
      * @param batchLineProtocol the batch line protocol string (multiple lines separated by \n)
      * @return a CompletableFuture that completes when the write is done
-     * @throws OpenGeminiException if the write fails
      */
     public CompletableFuture<Void> writeBatchLineProtocol(
             String database, String retentionPolicy, String batchLineProtocol) {
@@ -166,7 +162,6 @@ public class EnhancedOpenGeminiClient extends OpenGeminiClient {
      * @param database the name of the database
      * @param batchLineProtocol the batch line protocol string (multiple lines separated by \n)
      * @return a CompletableFuture that completes when the write is done
-     * @throws OpenGeminiException if the write fails
      */
     public CompletableFuture<Void> writeBatchLineProtocol(
             String database, String batchLineProtocol) {
