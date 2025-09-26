@@ -25,6 +25,11 @@ import org.apache.flink.table.types.logical.LogicalType;
 
 import io.opengemini.client.api.Precision;
 
+/**
+ * Abstract base class for converting Flink RowData to OpenGemini line protocol or Points. Handles
+ * common logic like extracting tags, fields, and timestamps based on configuration. Subclasses
+ * implement the actual conversion to line protocol strings or Point objects.
+ */
 public abstract class AbstractRowDataConverter implements Serializable {
     private static final long serialVersionUID = 1L;
 

@@ -177,6 +177,7 @@ public class OpenGeminiDynamicTableSink implements DynamicTableSink, Serializabl
         }
     }
 
+    /** Converter that transforms RowData to OpenGemini line protocol string */
     public static class RowDataToLineProtocolConverter extends AbstractRowDataConverter
             implements OpenGeminiLineProtocolConverter<RowData>, Serializable {
 
