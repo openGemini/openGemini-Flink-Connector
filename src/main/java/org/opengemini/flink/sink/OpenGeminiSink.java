@@ -44,7 +44,7 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * An Apache Flink sink connector for OpenGemini using the official OpenGemini client. This
- * implementation provides efficient batch writing with exactly-once semantics.
+ * implementation provides efficient batch writing with at-least-once semantics.
  *
  * @param <T> The type of elements handled by this sink
  */
@@ -129,12 +129,26 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         }
     }
 
+    /**
+     * Creates a new OpenGeminiSink with the specified configuration and point converter. NOT
+     * recommended, as it incurs extra overhead of converting Point to line protocol.
+     *
+     * @param configuration
+     * @param converter
+     */
     public OpenGeminiSink(
             OpenGeminiSinkConfiguration<T> configuration, OpenGeminiPointConverter<T> converter) {
         this.configuration = configuration;
         this.pointConverter = converter;
     }
 
+    /**
+     * Creates a new OpenGeminiSink with the specified configuration and line protocol converter.
+     * Recommended for best performance.
+     *
+     * @param configuration
+     * @param converter
+     */
     public OpenGeminiSink(
             OpenGeminiSinkConfiguration<T> configuration,
             OpenGeminiLineProtocolConverter<T> converter) {
@@ -142,6 +156,12 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         this.lineProtocolConverter = converter;
     }
 
+    /**
+     * Initializes the sink, setting up the OpenGemini client and preparing runtime state.
+     *
+     * @param parameters The configuration containing the parameters attached to the contract.
+     * @throws Exception
+     */
     @SuppressWarnings("unchecked")
     @Override
     public void open(Configuration parameters) throws Exception {
@@ -285,6 +305,14 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
                 });
     }
 
+    /**
+     * Processes each incoming record, converting it to line protocol and adding it to the current
+     * batch. If the batch size or flush interval is reached, the batch is written to OpenGemini.
+     *
+     * @param value The input record.
+     * @param context Additional context about the input record.
+     * @throws Exception
+     */
     @Override
     public void invoke(T value, Context context) throws Exception {
         if (value == null) return;
@@ -320,6 +348,11 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         }
     }
 
+    /**
+     * Determines if the current batch should be flushed based on size or time interval.
+     *
+     * @return
+     */
     private boolean shouldFlush() {
         boolean batchFull =
                 currentBatch.size()
@@ -332,6 +365,11 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         return batchFull || (timeoutReached && !currentBatch.isEmpty());
     }
 
+    /**
+     * Flushes the current batch to OpenGemini. This method is synchronized to ensure thread safety.
+     *
+     * @throws Exception
+     */
     private void flush() throws Exception {
         if (currentBatch == null || currentBatch.isEmpty()) {
             return;
@@ -451,8 +489,8 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
     /**
      * Used to calculate line protocol size for Flink Metrics
      *
-     * @param lineProtocols
-     * @return
+     * @param lineProtocols list of line protocol strings
+     * @return total size in bytes
      */
     private long calculateLinesSize(List<String> lineProtocols) {
         long totalSize = 0;
@@ -558,7 +596,11 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         }
     }
 
-    /** Evaluate and adjust batch size based on recent performance */
+    /**
+     * Evaluate batch size based on average latency and error count in the evaluation window. This
+     * method is called after each successful or failed batch write. If the average latency is below
+     * the increase threshold and there are no errors, the batch size is increased.
+     */
     private void evaluateBatchSize() {
         evaluationCounter++;
         if (evaluationCounter >= DYNAMIC_BATCH_SIZE_EVALUATION_INTERVAL) {
@@ -606,7 +648,7 @@ public class OpenGeminiSink<T> extends RichSinkFunction<T> implements Checkpoint
         }
     }
 
-    /** Reset evaluation window */
+    /** Reset evaluation window counters */
     private void resetEvaluationWindow() {
         evaluationCounter = 0;
         totalLatency = 0;

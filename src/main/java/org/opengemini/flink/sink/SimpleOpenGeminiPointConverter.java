@@ -32,7 +32,6 @@ import io.opengemini.client.api.Point;
 public class SimpleOpenGeminiPointConverter<T> implements OpenGeminiPointConverter<T> {
     private static final long serialVersionUID = 1L;
 
-    // TODO: compare double list indexing and hashmap
     private final Map<String, SerializableFunction<T, String>> tagExtractors;
     private final Map<String, SerializableFunction<T, java.lang.Object>> fieldExtractors;
     private final SerializableFunction<T, Long> timestampExtractor;
