@@ -45,6 +45,15 @@ public class SimpleOpenGeminiLineProtocolConverter<T>
         this.timestampExtractor = timestampExtractor;
     }
 
+    /**
+     * Converts the given value into an OpenGemini line protocol string with the specified
+     * measurement name. The method extracts tags, fields, and a timestamp from the value using the
+     * configured extractors.
+     *
+     * @param value The value to convert
+     * @param measurement The measurement name
+     * @return
+     */
     @Override
     public String convertToLineProtocol(T value, String measurement) {
         if (value == null) {
@@ -89,6 +98,12 @@ public class SimpleOpenGeminiLineProtocolConverter<T>
         return sb.toString();
     }
 
+    /**
+     * Escapes special characters in tag values according to OpenGemini line protocol rules.
+     *
+     * @param value
+     * @return
+     */
     public static String escape(String value) {
         return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=");
     }

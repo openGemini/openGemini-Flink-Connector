@@ -129,6 +129,14 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         return builder;
     }
 
+    /**
+     * Creates configuration from ParameterTool.
+     *
+     * @param params
+     * @param converter
+     * @return
+     * @param <T>
+     */
     public static <T> OpenGeminiSinkConfiguration<T> fromParameterTool(
             ParameterTool params, Object converter) {
 
@@ -174,6 +182,14 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         return builder.build();
     }
 
+    /**
+     * Creates configuration from Properties.
+     *
+     * @param props
+     * @param converter
+     * @return
+     * @param <T>
+     */
     public static <T> OpenGeminiSinkConfiguration<T> fromProperties(
             Properties props, Object converter) {
 
@@ -241,6 +257,15 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         return builder.build();
     }
 
+    /**
+     * Creates configuration from mixed sources: ParameterTool and Properties.
+     *
+     * @param params
+     * @param props
+     * @param converter
+     * @return
+     * @param <T>
+     */
     public static <T> OpenGeminiSinkConfiguration<T> fromMixedSources(
             ParameterTool params, Properties props, Object converter) {
 
@@ -368,11 +393,8 @@ public class OpenGeminiSinkConfiguration<T> implements Serializable {
         private String measurement;
         private String username;
         private String password;
-        // TODO: to be optimized
-        private int batchSize = DEFAULT_BATCH_SIZE; // Optimized based on benchmark
-        // TODO: to be optimized
-        private long flushIntervalMillis =
-                DEFAULT_FLUSH_INTERVAL_MS; // Optimized based on benchmark
+        private int batchSize = DEFAULT_BATCH_SIZE;
+        private long flushIntervalMillis = DEFAULT_FLUSH_INTERVAL_MS;
         private int maxRetries = DEFAULT_MAX_RETRIES;
         private Object converter;
         private Duration connectionTimeout = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS);
