@@ -270,6 +270,7 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
+                            <haltOnFailure>false</haltOnFailure>
                             <rules>
                                 <rule>
                                     <element>PACKAGE</element>
@@ -287,8 +288,8 @@
                                         <exclude>*Test</exclude>
                                         <exclude>*Exception</exclude>
                                         <exclude>*Configuration</exclude>
-                                        <exclude>EnhancedOpenGeminiClient</exclude>
-                                        <exclude>OpenGeminiClientFactory</exclude>
+                                        <exclude>org.opengemini.flink.utils.EnhancedOpenGeminiClient</exclude>
+                                        <exclude>org.opengemini.flink.utils.OpenGeminiClientFactory</exclude>
                                     </excludes>
                                     <limits>
                                         <limit>

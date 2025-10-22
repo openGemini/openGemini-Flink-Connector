@@ -21,7 +21,6 @@ import static org.awaitility.Awaitility.await;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -187,24 +186,15 @@ public class OpenGeminiSinkE2ETest {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(1);
 
-        // Generate test data
         long numberOfRecords = 100;
         env.addSource(new SensorDataGenerator(numberOfRecords, 10))
                 .addSink(new OpenGeminiSink<>(config));
 
-        // Execute
-        CompletableFuture<Void> jobFuture =
-                CompletableFuture.runAsync(
-                        () -> {
-                            try {
-                                env.execute("Basic E2E Test");
-                            } catch (Exception e) {
-                                throw new RuntimeException(e);
-                            }
-                        });
+        // synchronous execution to ensure job completion before verification
+        env.execute("Basic E2E Test");
 
-        // Wait for data to be written
-        await().atMost(Duration.ofSeconds(30))
+        // verify result
+        await().atMost(Duration.ofSeconds(20))
                 .pollInterval(Duration.ofSeconds(1))
                 .untilAsserted(
                         () -> {
@@ -213,7 +203,6 @@ public class OpenGeminiSinkE2ETest {
                             assertThat(count).isEqualTo(numberOfRecords);
                         });
 
-        // Verify data integrity
         verifyDataIntegrity();
     }
 
@@ -308,27 +297,19 @@ public class OpenGeminiSinkE2ETest {
 
         OpenGeminiSink<SensorData> sink = new OpenGeminiSink<>(config, lineProtocolConverter);
 
-        // Setup Flink environment
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(1);
 
-        // Generate test data
         long numberOfRecords = 100;
         env.addSource(new SensorDataGenerator(numberOfRecords, 10)).addSink(sink);
 
-        // Execute
-        CompletableFuture<Void> jobFuture =
-                CompletableFuture.runAsync(
-                        () -> {
-                            try {
-                                env.execute("Line Protocol E2E Test");
-                            } catch (Exception e) {
-                                throw new RuntimeException(e);
-                            }
-                        });
+        // synchronous execution to ensure job completion before verification
+        log.info("=== Starting Flink job synchronously ===");
+        env.execute("Line Protocol E2E Test");
+        log.info("=== Flink job completed successfully ===");
 
-        // Wait for data to be written
-        await().atMost(Duration.ofSeconds(30))
+        // verify result
+        await().atMost(Duration.ofSeconds(20))
                 .pollInterval(Duration.ofSeconds(1))
                 .untilAsserted(
                         () -> {
@@ -337,7 +318,6 @@ public class OpenGeminiSinkE2ETest {
                             assertThat(count).isEqualTo(numberOfRecords);
                         });
 
-        // Verify data integrity
         verifyDataIntegrity();
         log.info("Line Protocol converter test passed successfully");
     }
